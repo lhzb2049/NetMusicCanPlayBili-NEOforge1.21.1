@@ -1,0 +1,68 @@
+package com.zhongbai233.scene_editor.core.camera;
+
+import com.zhongbai233.scene_editor.core.projection.EditorViewport;
+import java.util.Objects;
+import org.joml.Matrix4f;
+import org.joml.Vector3d;
+
+public final class CameraMatrices {
+   private final Matrix4f view;
+   private final Matrix4f projection;
+   private final Matrix4f viewProjection;
+   private final Matrix4f inverseViewProjection;
+
+   private CameraMatrices(Matrix4f view, Matrix4f projection) {
+      this.view = new Matrix4f(view);
+      this.projection = new Matrix4f(projection);
+      this.viewProjection = new Matrix4f(projection).mul(view);
+      this.inverseViewProjection = new Matrix4f(this.viewProjection).invert();
+   }
+
+   public static CameraMatrices create(EditorCameraState camera, EditorViewport viewport) {
+      Vector3d position = camera.position();
+      Matrix4f view = new Matrix4f().rotate(camera.orientation().conjugate()).translate((float)(-position.x), (float)(-position.y), (float)(-position.z));
+      Matrix4f projection;
+      if (camera.mode() == EditorCameraMode.ORTHOGRAPHIC) {
+         float halfHeight = camera.orthoScale();
+         float halfWidth = halfHeight * (float)viewport.aspectRatio();
+         projection = new Matrix4f().ortho(-halfWidth, halfWidth, -halfHeight, halfHeight, camera.nearPlane(), camera.farPlane());
+      } else {
+         projection = new Matrix4f()
+            .perspective((float)Math.toRadians(camera.fovDegrees()), (float)viewport.aspectRatio(), camera.nearPlane(), camera.farPlane());
+      }
+
+      return new CameraMatrices(view, projection);
+   }
+
+   public static CameraMatrices from(Matrix4f view, Matrix4f projection) {
+      Objects.requireNonNull(view, "view");
+      Objects.requireNonNull(projection, "projection");
+      return new CameraMatrices(view, projection);
+   }
+
+   public Matrix4f view() {
+      return new Matrix4f(this.view);
+   }
+
+   public Matrix4f projection() {
+      return new Matrix4f(this.projection);
+   }
+
+   public Matrix4f viewProjection() {
+      return new Matrix4f(this.viewProjection);
+   }
+
+   public Matrix4f inverseViewProjection() {
+      return new Matrix4f(this.inverseViewProjection);
+   }
+
+   @Override
+   public boolean equals(Object other) {
+      return other instanceof CameraMatrices value && this.view.equals(value.view) && this.projection.equals(value.projection);
+   }
+
+   @Override
+   public int hashCode() {
+      return 31 * this.view.hashCode() + this.projection.hashCode();
+   }
+}

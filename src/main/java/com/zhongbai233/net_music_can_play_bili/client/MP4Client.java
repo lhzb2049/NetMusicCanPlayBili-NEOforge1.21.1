@@ -1,0 +1,467 @@
+package com.zhongbai233.net_music_can_play_bili.client;
+
+import com.zhongbai233.net_music_can_play_bili.gui.MP4FocusScreen;
+import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
+import com.zhongbai233.net_music_can_play_bili.network.MP4EnsureDeviceIdPacket;
+import com.zhongbai233.net_music_can_play_bili.network.MP4EnsureInventoryDeviceIdPacket;
+import com.zhongbai233.net_music_can_play_bili.network.MP4PlaybackControlPacket;
+import com.zhongbai233.net_music_can_play_bili.network.MP4StatePacket;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.Map.Entry;
+import java.util.concurrent.ConcurrentHashMap;
+import net.minecraft.client.Minecraft;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.inventory.Slot;
+import net.minecraft.world.item.ItemStack;
+import net.neoforged.neoforge.network.PacketDistributor;
+
+public final class MP4Client {
+   private static final int FAST_SYNC_INTERVAL_TICKS = 10;
+   private static final long PENDING_SELECTION_CONFIRM_MILLIS = 1500L;
+   private static final Map<PlaybackSourceId, MP4Item.State> DEVICE_STATES = new ConcurrentHashMap<>();
+   private static final Map<PlaybackSourceId, Long> DEVICE_STATE_TIMES = new ConcurrentHashMap<>();
+   private static final Map<PlaybackSourceId, List<ItemStack>> DEVICE_QUEUES = new ConcurrentHashMap<>();
+   private static final Map<PlaybackSourceId, Boolean> DEVICE_HEADPHONE_LINKS = new ConcurrentHashMap<>();
+   private static final Map<PlaybackSourceId, MP4Client.PendingSelection> PENDING_SELECTIONS = new ConcurrentHashMap<>();
+   private static final Map<PlaybackSourceId, MP4Client.PendingStateSync> PENDING_STATE_SYNCS = new ConcurrentHashMap<>();
+   private static long localStateSequence;
+   private static int ensureCooldownTicks;
+   private static int fastSyncTicks;
+   private static boolean focusedStateSyncRequested;
+
+   private MP4Client() {
+   }
+
+   public static void tickHeldDeviceIdPrefetch() {
+      Minecraft minecraft = Minecraft.getInstance();
+      if (minecraft.player != null && minecraft.getConnection() != null) {
+         pruneCachedStates(minecraft);
+         tickFocusedStateSync(minecraft);
+         if (ensureCooldownTicks > 0) {
+            ensureCooldownTicks--;
+         } else {
+            boolean requested = ensureHotbarDeviceIds(minecraft);
+            requested |= ensureHeldDeviceId(minecraft, InteractionHand.OFF_HAND);
+            ensureCooldownTicks = requested ? 10 : 20;
+         }
+      } else {
+         ensureCooldownTicks = 0;
+         fastSyncTicks = 0;
+         focusedStateSyncRequested = false;
+      }
+   }
+
+   private static boolean ensureHotbarDeviceIds(Minecraft minecraft) {
+      int hotbarSlots = Math.min(9, minecraft.player.getInventory().getContainerSize());
+      boolean requested = false;
+
+      for (int slot = 0; slot < hotbarSlots; slot++) {
+         ItemStack stack = minecraft.player.getInventory().getItem(slot);
+         if (stack.getItem() instanceof MP4Item) {
+            UUID deviceId = MP4Item.readDeviceId(stack);
+            if (deviceId == null || !DEVICE_STATES.containsKey(PlaybackSourceId.of(deviceId))) {
+               PacketDistributor.sendToServer(new MP4EnsureInventoryDeviceIdPacket(slot), new CustomPacketPayload[0]);
+               requested = true;
+            }
+         }
+      }
+
+      return requested;
+   }
+
+   private static boolean ensureHeldDeviceId(Minecraft minecraft, InteractionHand hand) {
+      ItemStack stack = minecraft.player.getItemInHand(hand);
+      if (!(stack.getItem() instanceof MP4Item)) {
+         return false;
+      } else {
+         UUID deviceId = MP4Item.readDeviceId(stack);
+         if (deviceId != null && DEVICE_STATES.containsKey(PlaybackSourceId.of(deviceId))) {
+            return false;
+         } else {
+            PacketDistributor.sendToServer(new MP4EnsureDeviceIdPacket(hand), new CustomPacketPayload[0]);
+            return true;
+         }
+      }
+   }
+
+   public static void openFocusScreen(InteractionHand hand) {
+      Minecraft minecraft = Minecraft.getInstance();
+      if (minecraft.player != null && hand != InteractionHand.OFF_HAND) {
+         ItemStack stack = minecraft.player.getItemInHand(hand);
+         if (stack.getItem() instanceof MP4Item) {
+            MP4FocusState.load(stateForHeldRender(stack));
+            MP4FocusState.loadQueue(queueForHeldRender(stack));
+            boolean hintJustShown = MP4FocusState.showRotationHintIfNotShown();
+            minecraft.setScreen(new MP4FocusScreen(hand));
+            if (minecraft.getConnection() != null) {
+               PacketDistributor.sendToServer(new MP4EnsureDeviceIdPacket(hand), new CustomPacketPayload[0]);
+               if (hintJustShown) {
+                  syncFocusedStateToServer();
+               }
+            }
+         }
+      }
+   }
+
+   public static void receiveDeviceId(InteractionHand hand, UUID deviceId) {
+      Minecraft minecraft = Minecraft.getInstance();
+      if (minecraft.player != null && deviceId != null) {
+         ItemStack stack = minecraft.player.getItemInHand(hand);
+         if (stack.getItem() instanceof MP4Item) {
+            MP4Item.writeDeviceId(stack, deviceId);
+            if (MP4FocusState.activeFor(hand) && focusedStateSyncRequested) {
+               fastSyncTicks = 0;
+            }
+         }
+      }
+   }
+
+   public static void receiveContainerDeviceId(int containerSlotIndex, UUID deviceId) {
+      Minecraft minecraft = Minecraft.getInstance();
+      if (minecraft.player != null && deviceId != null && minecraft.player.containerMenu != null) {
+         if (containerSlotIndex >= 0 && containerSlotIndex < minecraft.player.containerMenu.slots.size()) {
+            ItemStack stack = ((Slot)minecraft.player.containerMenu.slots.get(containerSlotIndex)).getItem();
+            if (stack.getItem() instanceof MP4Item) {
+               MP4Item.writeDeviceId(stack, deviceId);
+            }
+         }
+      }
+   }
+
+   public static void receiveInventoryDeviceId(int inventorySlot, UUID deviceId) {
+      Minecraft minecraft = Minecraft.getInstance();
+      if (minecraft.player != null && deviceId != null) {
+         if (inventorySlot >= 0 && inventorySlot < Math.min(9, minecraft.player.getInventory().getContainerSize())) {
+            ItemStack stack = minecraft.player.getInventory().getItem(inventorySlot);
+            if (stack.getItem() instanceof MP4Item) {
+               MP4Item.writeDeviceId(stack, deviceId);
+            }
+         }
+      }
+   }
+
+   public static void receiveOpenState(
+      InteractionHand hand, UUID deviceId, MP4Item.State state, long updatedGameTime, boolean headphoneLinked, List<ItemStack> queue
+   ) {
+      Minecraft minecraft = Minecraft.getInstance();
+      if (minecraft.player != null && deviceId != null && state != null) {
+         ItemStack stack = minecraft.player.getItemInHand(hand);
+         if (stack.getItem() instanceof MP4Item) {
+            MP4Item.writeDeviceId(stack, deviceId);
+            acceptServerConfig(deviceId, state, updatedGameTime, headphoneLinked, queue);
+            if (MP4FocusState.activeFor(hand) && focusedStateSyncRequested) {
+               fastSyncTicks = 0;
+            }
+         }
+      }
+   }
+
+   public static void receiveMirroredState(UUID deviceId, MP4Item.State state, long updatedGameTime, boolean headphoneLinked, List<ItemStack> queue) {
+      Minecraft minecraft = Minecraft.getInstance();
+      if (minecraft.player != null && deviceId != null && state != null) {
+         acceptServerConfig(deviceId, state, updatedGameTime, headphoneLinked, queue);
+      }
+   }
+
+   private static boolean acceptServerConfig(UUID deviceId, MP4Item.State state, long updatedGameTime, boolean headphoneLinked, List<ItemStack> queue) {
+      PlaybackSourceId sourceId = PlaybackSourceId.of(deviceId);
+      long safeTime = Math.max(0L, updatedGameTime);
+      long currentTime = DEVICE_STATE_TIMES.getOrDefault(sourceId, -1L);
+      if (safeTime < currentTime) {
+         return false;
+      } else {
+         state = preservePendingSelection(deviceId, state, queue);
+         DEVICE_STATES.put(sourceId, state);
+         DEVICE_STATE_TIMES.put(sourceId, safeTime);
+         DEVICE_QUEUES.put(sourceId, cleanQueue(queue));
+         DEVICE_HEADPHONE_LINKS.put(sourceId, headphoneLinked);
+         return true;
+      }
+   }
+
+   public static void markStackStateDirty(ItemStack stack, MP4Item.State state) {
+      UUID deviceId = MP4Item.readDeviceId(stack);
+      if (deviceId != null && state != null) {
+         cacheLocalState(deviceId, state, stack);
+         PENDING_STATE_SYNCS.put(PlaybackSourceId.of(deviceId), new MP4Client.PendingStateSync(state, System.currentTimeMillis(), ++localStateSequence));
+         focusedStateSyncRequested = true;
+      }
+   }
+
+   private static MP4Item.State preservePendingSelection(UUID deviceId, MP4Item.State state, List<ItemStack> queue) {
+      PlaybackSourceId sourceId = PlaybackSourceId.of(deviceId);
+      MP4Client.PendingSelection pending = PENDING_SELECTIONS.get(sourceId);
+      if (pending == null) {
+         return state;
+      } else if (System.currentTimeMillis() - pending.createdAtMillis() > 1500L) {
+         PENDING_SELECTIONS.remove(sourceId);
+         return state;
+      } else {
+         int queueSize = queue != null && !queue.isEmpty() ? queue.size() : Math.max(1, state.selectedQueueIndex() + 1);
+         int selected = Math.max(0, Math.min(queueSize - 1, pending.selectedQueueIndex()));
+         if (state.selectedQueueIndex() == selected) {
+            PENDING_SELECTIONS.remove(sourceId);
+            return state;
+         } else {
+            return new MP4Item.State(
+               state.playing(),
+               state.shuffle(),
+               state.videoEnabled(),
+               state.landscape(),
+               state.qualityIndex(),
+               selected,
+               state.queueScrollOffset(),
+               state.volumePerMille(),
+               state.repeatMode(),
+               state.playlistOpen(),
+               state.lyricsEnabled(),
+               state.subtitleMode(),
+               state.subtitleAiEnabled(),
+               0,
+               state.rotationHintShown()
+            );
+         }
+      }
+   }
+
+   private static List<ItemStack> cleanQueue(List<ItemStack> queue) {
+      return queue != null && !queue.isEmpty()
+         ? queue.stream().filter(MP4Item::isNetMusicDisc).limit(18L).map(stack -> stack.copyWithCount(1)).toList()
+         : List.of();
+   }
+
+   public static MP4Item.State stateForHeldRender(ItemStack stack) {
+      if (stack != null && stack.getItem() instanceof MP4Item) {
+         UUID deviceId = MP4Item.readDeviceId(stack);
+         MP4Item.State baseState = deviceId != null ? DEVICE_STATES.get(PlaybackSourceId.of(deviceId)) : null;
+         if (baseState == null) {
+            baseState = MP4Item.State.DEFAULT;
+         }
+
+         return MP4PlaybackUiState.overlayPlaybackState(deviceId, baseState);
+      } else {
+         return MP4Item.State.DEFAULT;
+      }
+   }
+
+   public static MP4Item.State cachedStateFor(ItemStack stack) {
+      UUID deviceId = MP4Item.readDeviceId(stack);
+      MP4Item.State state = deviceId != null ? DEVICE_STATES.get(PlaybackSourceId.of(deviceId)) : null;
+      return state != null ? state : MP4Item.State.DEFAULT;
+   }
+
+   public static void selectQueueIndexLocally(ItemStack stack, int selectedQueueIndex) {
+      UUID deviceId = MP4Item.readDeviceId(stack);
+      if (deviceId != null) {
+         MP4Item.State old = cachedStateFor(stack);
+         int queueSize = Math.max(1, MP4Item.queueSize(stack));
+         int selected = Math.max(0, Math.min(queueSize - 1, selectedQueueIndex));
+         int progressPerMille = selected == old.selectedQueueIndex() ? old.progressPerMille() : 0;
+         MP4Item.State state = new MP4Item.State(
+            old.playing(),
+            old.shuffle(),
+            old.videoEnabled(),
+            old.landscape(),
+            old.qualityIndex(),
+            selected,
+            old.queueScrollOffset(),
+            old.volumePerMille(),
+            old.repeatMode(),
+            old.playlistOpen(),
+            old.lyricsEnabled(),
+            old.subtitleMode(),
+            old.subtitleAiEnabled(),
+            progressPerMille,
+            old.rotationHintShown()
+         );
+         markStackStateDirty(stack, state);
+         PENDING_SELECTIONS.put(PlaybackSourceId.of(deviceId), new MP4Client.PendingSelection(selected, System.currentTimeMillis()));
+      }
+   }
+
+   public static List<ItemStack> cachedQueueFor(ItemStack stack) {
+      UUID deviceId = MP4Item.readDeviceId(stack);
+      List<ItemStack> queue = deviceId != null ? DEVICE_QUEUES.get(PlaybackSourceId.of(deviceId)) : null;
+      return queue != null ? queue : MP4Item.readQueue(stack);
+   }
+
+   public static boolean headphoneLinked(UUID deviceId) {
+      return deviceId != null && DEVICE_HEADPHONE_LINKS.getOrDefault(PlaybackSourceId.of(deviceId), false);
+   }
+
+   private static List<ItemStack> queueForHeldRender(ItemStack stack) {
+      return cachedQueueFor(stack);
+   }
+
+   public static void cacheFocusedState(UUID deviceId) {
+      if (deviceId != null) {
+         PlaybackSourceId sourceId = PlaybackSourceId.of(deviceId);
+         DEVICE_STATES.put(sourceId, MP4FocusState.save());
+         DEVICE_STATE_TIMES.putIfAbsent(sourceId, 0L);
+         DEVICE_QUEUES.putIfAbsent(sourceId, MP4Item.readQueue(stackForActiveDevice()));
+      }
+   }
+
+   private static ItemStack stackForActiveDevice() {
+      Minecraft minecraft = Minecraft.getInstance();
+      return minecraft.player != null && MP4FocusState.active() ? minecraft.player.getItemInHand(MP4FocusState.hand()) : ItemStack.EMPTY;
+   }
+
+   public static void clearCachedStates() {
+      DEVICE_STATES.clear();
+      DEVICE_STATE_TIMES.clear();
+      DEVICE_QUEUES.clear();
+      DEVICE_HEADPHONE_LINKS.clear();
+      PENDING_SELECTIONS.clear();
+      PENDING_STATE_SYNCS.clear();
+      ensureCooldownTicks = 0;
+      fastSyncTicks = 0;
+      focusedStateSyncRequested = false;
+   }
+
+   public static void syncFocusedStateToServer() {
+      requestFocusedStateSync();
+   }
+
+   public static void updateFocusedLocalState() {
+      requestFocusedStateSync();
+   }
+
+   public static void flushFocusedStateToServer() {
+      Minecraft minecraft = Minecraft.getInstance();
+      sendFocusedStateToServer(minecraft, true);
+   }
+
+   private static void requestFocusedStateSync() {
+      cacheFocusedStateFromActiveStack();
+      focusedStateSyncRequested = true;
+   }
+
+   private static void cacheFocusedStateFromActiveStack() {
+      Minecraft minecraft = Minecraft.getInstance();
+      if (minecraft.player != null && MP4FocusState.active()) {
+         ItemStack stack = minecraft.player.getItemInHand(MP4FocusState.hand());
+         UUID deviceId = MP4Item.readDeviceId(stack);
+         if (deviceId != null) {
+            PlaybackSourceId sourceId = PlaybackSourceId.of(deviceId);
+            DEVICE_STATES.put(sourceId, MP4FocusState.save());
+            DEVICE_STATE_TIMES.putIfAbsent(sourceId, 0L);
+            DEVICE_QUEUES.putIfAbsent(sourceId, MP4Item.readQueue(stack));
+            PENDING_STATE_SYNCS.put(sourceId, new MP4Client.PendingStateSync(MP4FocusState.save(), System.currentTimeMillis(), ++localStateSequence));
+         }
+      }
+   }
+
+   private static void tickFocusedStateSync(Minecraft minecraft) {
+      if (fastSyncTicks > 0) {
+         fastSyncTicks--;
+      }
+
+      if (focusedStateSyncRequested && fastSyncTicks <= 0) {
+         sendPendingStateSyncs(minecraft);
+      }
+   }
+
+   private static void sendFocusedStateToServer(Minecraft minecraft, boolean force) {
+      if (force || focusedStateSyncRequested) {
+         if (minecraft != null) {
+            if (minecraft.player != null) {
+               ItemStack stack = minecraft.player.getItemInHand(MP4FocusState.hand());
+               if (stack.getItem() instanceof MP4Item) {
+                  MP4Item.State state = MP4FocusState.save();
+                  if (minecraft.getConnection() != null) {
+                     UUID deviceId = MP4Item.readDeviceId(stack);
+                     if (deviceId == null) {
+                        PacketDistributor.sendToServer(new MP4EnsureDeviceIdPacket(MP4FocusState.hand()), new CustomPacketPayload[0]);
+                        focusedStateSyncRequested = true;
+                        fastSyncTicks = 10;
+                        return;
+                     }
+
+                     markStackStateDirty(stack, state);
+                     if (force) {
+                        sendPendingStateSyncs(minecraft);
+                     }
+                  }
+               }
+            }
+         }
+      }
+   }
+
+   private static void sendPendingStateSyncs(Minecraft minecraft) {
+      if (minecraft != null && minecraft.player != null && minecraft.getConnection() != null) {
+         if (PENDING_STATE_SYNCS.isEmpty()) {
+            focusedStateSyncRequested = false;
+         } else {
+            for (Entry<PlaybackSourceId, MP4Client.PendingStateSync> entry : new ArrayList<>(PENDING_STATE_SYNCS.entrySet())) {
+               PlaybackSourceId sourceId = entry.getKey();
+               UUID deviceId = sourceId.value();
+               MP4Client.PendingStateSync pending = PENDING_STATE_SYNCS.remove(sourceId);
+               if (pending != null) {
+                  ItemStack stack = MP4Item.findByDeviceId(minecraft.player, deviceId);
+                  if (stack.getItem() instanceof MP4Item) {
+                     cacheLocalState(deviceId, pending.state(), stack);
+                     PacketDistributor.sendToServer(
+                        MP4StatePacket.fromState(pending.state(), deviceId, pending.updatedAtMillis(), pending.sequence()), new CustomPacketPayload[0]
+                     );
+                     if (pending.state().playing()) {
+                        PacketDistributor.sendToServer(
+                           new MP4PlaybackControlPacket(
+                              MP4PlaybackControlPacket.Action.VOLUME, pending.state().selectedQueueIndex(), pending.state().volumePerMille(), 0L, deviceId
+                           ),
+                           new CustomPacketPayload[0]
+                        );
+                     }
+                  }
+               }
+            }
+
+            focusedStateSyncRequested = !PENDING_STATE_SYNCS.isEmpty();
+            fastSyncTicks = 10;
+         }
+      }
+   }
+
+   private static void pruneCachedStates(Minecraft minecraft) {
+      if (minecraft.player != null && !DEVICE_STATES.isEmpty()) {
+         HashSet<UUID> present = new HashSet<>();
+         addDeviceId(present, minecraft.player.containerMenu != null ? minecraft.player.containerMenu.getCarried() : ItemStack.EMPTY);
+         addDeviceId(present, minecraft.player.getMainHandItem());
+         MP4DeviceStacks.addHotbarAndOffhandDeviceIds(minecraft.player, present);
+         DEVICE_STATES.keySet().removeIf(sourceId -> !present.contains(sourceId.value()));
+         DEVICE_STATE_TIMES.keySet().removeIf(sourceId -> !present.contains(sourceId.value()));
+         DEVICE_QUEUES.keySet().removeIf(sourceId -> !present.contains(sourceId.value()));
+         DEVICE_HEADPHONE_LINKS.keySet().removeIf(sourceId -> !present.contains(sourceId.value()));
+         PENDING_SELECTIONS.keySet().removeIf(sourceId -> !present.contains(sourceId.value()));
+         PENDING_STATE_SYNCS.keySet().removeIf(sourceId -> !present.contains(sourceId.value()));
+      }
+   }
+
+   private static void cacheLocalState(UUID deviceId, MP4Item.State state, ItemStack stack) {
+      PlaybackSourceId sourceId = PlaybackSourceId.of(deviceId);
+      DEVICE_STATES.put(sourceId, state);
+      DEVICE_STATE_TIMES.putIfAbsent(sourceId, 0L);
+      DEVICE_QUEUES.putIfAbsent(sourceId, MP4Item.readQueue(stack));
+   }
+
+   private static void addDeviceId(Set<UUID> deviceIds, ItemStack stack) {
+      UUID deviceId = MP4Item.readDeviceId(stack);
+      if (deviceId != null) {
+         deviceIds.add(deviceId);
+      }
+   }
+
+   private record PendingSelection(int selectedQueueIndex, long createdAtMillis) {
+   }
+
+   private record PendingStateSync(MP4Item.State state, long updatedAtMillis, long sequence) {
+   }
+}

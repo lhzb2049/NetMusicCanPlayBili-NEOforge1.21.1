@@ -1,0 +1,58 @@
+package com.zhongbai233.net_music_can_play_bili.network;
+
+import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
+import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
+import java.util.UUID;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload.Type;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.item.ItemStack;
+import net.neoforged.neoforge.network.PacketDistributor;
+import net.neoforged.neoforge.network.handling.IPayloadContext;
+
+public record MP4EnsureDeviceIdPacket(InteractionHand hand) implements CustomPacketPayload {
+   public static final Type<MP4EnsureDeviceIdPacket> TYPE = new Type(NetworkPayloadIds.id("mp4_ensure_device_id"));
+   private static final StreamCodec<RegistryFriendlyByteBuf, InteractionHand> HAND_CODEC = new StreamCodec<RegistryFriendlyByteBuf, InteractionHand>() {
+      public InteractionHand decode(RegistryFriendlyByteBuf buffer) {
+         return buffer.readBoolean() ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
+      }
+
+      public void encode(RegistryFriendlyByteBuf buffer, InteractionHand value) {
+         buffer.writeBoolean(value == InteractionHand.OFF_HAND);
+      }
+   };
+   public static final StreamCodec<RegistryFriendlyByteBuf, MP4EnsureDeviceIdPacket> STREAM_CODEC = StreamCodec.composite(
+      HAND_CODEC, packet -> packet.hand(), hand -> new MP4EnsureDeviceIdPacket(hand)
+   );
+
+   public Type<? extends CustomPacketPayload> type() {
+      return TYPE;
+   }
+
+   public static void handle(MP4EnsureDeviceIdPacket payload, IPayloadContext context) {
+      if (context.player() instanceof ServerPlayer player) {
+         if (NetworkRateLimiter.allow(player.getUUID(), "mp4_ensure_device_id", 4)) {
+            ItemStack stack = player.getItemInHand(payload.hand());
+            if (stack.getItem() instanceof MP4Item) {
+               ServerLevel level = (ServerLevel)player.level();
+               UUID deviceId = MP4DeviceIdentity.getOrCreateUnique(level, player, stack);
+               if (deviceId != null) {
+                  PacketDistributor.sendToPlayer(player, new MP4DeviceIdPacket(payload.hand(), deviceId), new CustomPacketPayload[0]);
+                  MP4DeviceStateStore.syncQueueCopy(level, deviceId, stack);
+                  PacketDistributor.sendToPlayer(
+                     player,
+                     MP4DeviceStateMirrorPacket.fromEntry(
+                        deviceId, MP4DeviceStateStore.getOrCreate(level, deviceId, stack), AudioLinkIndex.hasHeadphoneLinkedToMp4(deviceId)
+                     ),
+                     new CustomPacketPayload[0]
+                  );
+               }
+            }
+         }
+      }
+   }
+}

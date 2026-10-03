@@ -1,0 +1,684 @@
+package com.zhongbai233.net_music_can_play_bili.client.renderer.item;
+
+import com.mojang.blaze3d.platform.Window;
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.VertexConsumer;
+import com.mojang.blaze3d.vertex.PoseStack.Pose;
+import com.mojang.math.Axis;
+import com.zhongbai233.net_music_can_play_bili.client.MP4BiliLoginOverlay;
+import com.zhongbai233.net_music_can_play_bili.client.MP4Client;
+import com.zhongbai233.net_music_can_play_bili.client.MP4FocusState;
+import com.zhongbai233.net_music_can_play_bili.client.MP4HandheldVideoClient;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.ClientDisplayProperties;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.RenderVertexUtils;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.video.IrisShaderpackCompat;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.video.YuvVideoRenderTypes;
+import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
+import com.zhongbai233.net_music_can_play_bili.port.shim.PortSubmitNodeCollector;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.player.AbstractClientPlayer;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.texture.OverlayTexture;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.HumanoidArm;
+import net.minecraft.world.item.ItemStack;
+import org.joml.Matrix4f;
+import org.joml.Vector4f;
+
+public final class MP4ItemScreenRenderer {
+   private static final int FULL_BRIGHT = 15728880;
+   private static final float HOVER_TILT_DEGREES = 4.0F;
+   private static final float HOVER_HAND_FOLLOW_DEPTH = 0.055F;
+   private static final float HELD_SURFACE_X = 0.53F;
+   private static final float HELD_SURFACE_Y = 0.08F;
+   private static final float HELD_SURFACE_Z = -1.08F;
+   private static final float HELD_SURFACE_SCALE = 1.48F;
+   private static final float FOCUSED_SURFACE_X = 0.5F;
+   private static final float FOCUSED_SURFACE_Y = 0.1F;
+   private static final float FOCUSED_SURFACE_Z = -1.09F;
+   private static final float FOCUSED_SURFACE_SCALE = 1.92F;
+   private static final float VIDEO_LAYER_OVERSCAN_PIXELS = 2.0F;
+   private static final float DEVICE_BORDER = 0.035F;
+   private static final float DEVICE_THICKNESS = 0.055F;
+   private static final float SCREEN_FACE_Z_OFFSET = 0.02F;
+   private static final float SCREEN_TEXTURE_Z_OFFSET = 0.022F;
+   private static final PlaybackSourceId FALLBACK_SOURCE_ID = PlaybackSourceId.of(new UUID(0L, 0L));
+   private static final Map<PlaybackSourceId, MP4GuiTexture> GUI_TEXTURES = new ConcurrentHashMap<>();
+
+   private MP4ItemScreenRenderer() {
+   }
+
+   public static void warmup() {
+      textureFor(null).warmup();
+   }
+
+   public static void releaseAll() {
+      GUI_TEXTURES.values().forEach(texture -> texture.close());
+      GUI_TEXTURES.clear();
+      MP4Nv12VideoLayer.releaseAll();
+      MP4RgbaVideoLayer.releaseAll();
+   }
+
+   public static void releaseVideoLayers(UUID deviceId) {
+      MP4Nv12VideoLayer.release(deviceId);
+      MP4RgbaVideoLayer.release(deviceId);
+   }
+
+   public static void releaseDeviceResources(UUID deviceId) {
+      if (deviceId != null) {
+         MP4GuiTexture guiTexture = GUI_TEXTURES.remove(PlaybackSourceId.of(deviceId));
+         if (guiTexture != null) {
+            guiTexture.close();
+         }
+
+         releaseVideoLayers(deviceId);
+      }
+   }
+
+   public static void releaseAllVideoLayers() {
+      MP4Nv12VideoLayer.releaseAll();
+      MP4RgbaVideoLayer.releaseAll();
+   }
+
+   public static void renderHeldOffscreenGuiFrameStart() {
+      Minecraft minecraft = Minecraft.getInstance();
+      if (minecraft.player != null) {
+         renderHeldOffscreenGuiFrameStart(minecraft.player.getMainHandItem());
+         renderHeldOffscreenGuiFrameStart(minecraft.player.getOffhandItem());
+      }
+   }
+
+   private static void renderHeldOffscreenGuiFrameStart(ItemStack stack) {
+      if (stack.getItem() instanceof MP4Item) {
+         UUID deviceId = MP4Item.readDeviceId(stack);
+         if (deviceId != null) {
+            textureFor(deviceId).renderFrameStart(deviceId);
+         }
+      }
+   }
+
+   public static void renderMapLike(
+      AbstractClientPlayer player,
+      float partialTick,
+      float pitch,
+      InteractionHand hand,
+      ItemStack stack,
+      float swingProgress,
+      float equipProgress,
+      PoseStack poseStack,
+      MultiBufferSource bufferSource,
+      int light,
+      HandheldArmRenderer armRenderer
+   ) {
+      PortSubmitNodeCollector collector = new PortSubmitNodeCollector(bufferSource);
+
+      try {
+         renderMapLikeInternal(player, partialTick, pitch, hand, stack, swingProgress, equipProgress, poseStack, bufferSource, light, armRenderer, collector);
+      } finally {
+         collector.end();
+      }
+   }
+
+   private static void renderMapLikeInternal(
+      AbstractClientPlayer player,
+      float partialTick,
+      float pitch,
+      InteractionHand hand,
+      ItemStack stack,
+      float swingProgress,
+      float equipProgress,
+      PoseStack poseStack,
+      MultiBufferSource bufferSource,
+      int light,
+      HandheldArmRenderer armRenderer,
+      PortSubmitNodeCollector collector
+   ) {
+      boolean mainHand = hand == InteractionHand.MAIN_HAND;
+      HumanoidArm arm = mainHand ? player.getMainArm() : player.getMainArm().getOpposite();
+      UUID deviceId = stack.getItem() instanceof MP4Item ? MP4Item.readDeviceId(stack) : null;
+      if (!MP4FocusState.activeFor(hand) && stack.getItem() instanceof MP4Item) {
+         MP4FocusState.loadForHeldRender(MP4Client.stateForHeldRender(stack));
+         MP4FocusState.loadQueue(MP4Client.cachedQueueFor(stack));
+      }
+
+      poseStack.pushPose();
+      if (MP4FocusState.activeFor(hand)) {
+         applyFocusedMapPose(partialTick, poseStack);
+         renderFocusedHand(player, partialTick, poseStack, bufferSource, light, arm, armRenderer);
+      } else {
+         applyOneHandedMapPose(arm, swingProgress, equipProgress, poseStack, bufferSource, light, armRenderer);
+      }
+
+      submitTexturedSurface(poseStack, collector, partialTick, deviceId);
+      poseStack.popPose();
+   }
+
+   private static void renderFocusedHand(
+      AbstractClientPlayer player,
+      float partialTick,
+      PoseStack poseStack,
+      MultiBufferSource bufferSource,
+      int light,
+      HumanoidArm arm,
+      HandheldArmRenderer armRenderer
+   ) {
+      if (!player.isInvisible()) {
+         poseStack.pushPose();
+         float side = arm == HumanoidArm.RIGHT ? 1.0F : -1.0F;
+         float p = MP4FocusState.progress(partialTick);
+         poseStack.translate(side * -0.085F, -0.083F, 0.255F + focusedHandFollowDepth() * p);
+         poseStack.mulPose(Axis.ZP.rotationDegrees(side * 3.0F));
+         armRenderer.renderPlayerArm(poseStack, bufferSource, light, 0.0F, 0.0F, arm);
+         poseStack.popPose();
+      }
+   }
+
+   private static void applyFocusedMapPose(float partialTick, PoseStack poseStack) {
+      float p = MP4FocusState.progress(partialTick);
+      float eased = 1.0F - (1.0F - p) * (1.0F - p);
+      poseStack.translate(lerp(0.53F, 0.5F, eased), lerp(0.08F, 0.1F, eased), lerp(-1.08F, -1.09F, eased));
+      float scale = lerp(1.48F, 1.92F, eased);
+      poseStack.scale(scale, scale, scale);
+   }
+
+   private static void applyOneHandedMapPose(
+      HumanoidArm arm,
+      float swingProgress,
+      float equipProgress,
+      PoseStack poseStack,
+      MultiBufferSource bufferSource,
+      int light,
+      HandheldArmRenderer armRenderer
+   ) {
+      float side = arm == HumanoidArm.RIGHT ? 1.0F : -1.0F;
+      poseStack.translate(side * 0.055F, -0.105F, 0.0F);
+      Minecraft minecraft = Minecraft.getInstance();
+      if (minecraft.player != null && !minecraft.player.isInvisible()) {
+         poseStack.pushPose();
+         poseStack.mulPose(Axis.ZP.rotationDegrees(side * 6.0F));
+         armRenderer.renderPlayerArm(poseStack, bufferSource, light, equipProgress, swingProgress, arm);
+         poseStack.popPose();
+      }
+
+      poseStack.translate(side * 0.53F, 0.08F + equipProgress * -0.85F, -1.08F);
+      poseStack.scale(1.48F, 1.48F, 1.48F);
+   }
+
+   private static float lerp(float start, float end, float t) {
+      return start + (end - start) * t;
+   }
+
+   private static void submitTexturedSurface(PoseStack poseStack, PortSubmitNodeCollector collector, float partialTick, UUID deviceId) {
+      MP4FocusState.renderTick();
+      MP4GuiTexture guiTexture = textureFor(deviceId);
+      ResourceLocation textureId = guiTexture.textureId(deviceId);
+      boolean flipGuiV = true;
+      ResourceLocation bodyTextureId = guiTexture.whiteTextureId();
+      float logicalWidth = MP4GuiTexture.WIDTH;
+      float logicalHeight = MP4GuiTexture.HEIGHT;
+      float aspect = logicalWidth / logicalHeight;
+      float halfHeight = 0.5F;
+      float halfWidth = halfHeight * aspect;
+      float hoverX = MP4FocusState.hoverX() * guiHoverFlip(partialTick);
+      float hoverY = MP4FocusState.hoverY() * guiHoverFlip(partialTick);
+      float bx0 = -halfWidth - 0.035F;
+      float by0 = halfHeight + 0.035F;
+      float bx1 = halfWidth + 0.035F;
+      float by1 = -halfHeight - 0.035F;
+      float backZ = -0.055F;
+      float bodyDepthBoost = 0.02F;
+      float p0z = 0.0F;
+      float p1z = 0.0F;
+      float p2z = 0.0F;
+      float p3z = 0.0F;
+      float screenFaceZ = 0.02F;
+      float screenTextureZ = 0.022F;
+      float b0z = 0.02F;
+      float b1z = 0.02F;
+      float b2z = 0.02F;
+      float b3z = 0.02F;
+      float flatBackZ = -0.035F;
+      float bb0z = -0.035F;
+      float bb1z = -0.035F;
+      float bb2z = -0.035F;
+      float bb3z = -0.035F;
+      poseStack.pushPose();
+      poseStack.scale(0.532F, 0.532F, 0.532F);
+      float landscapeShift = MP4FocusState.landscapeTransformProgress(partialTick) * 0.5F;
+      poseStack.translate(-halfHeight * 2.0F * landscapeShift, 0.0F, 0.0F);
+      float pivotX = lerp(-halfWidth, halfWidth, 0.58F);
+      float pivotY = lerp(halfHeight, -halfHeight, 0.88F);
+      poseStack.translate(pivotX, pivotY, 0.0F);
+      poseStack.mulPose(Axis.ZP.rotationDegrees(deviceRotationDegrees(partialTick)));
+      poseStack.mulPose(Axis.XP.rotationDegrees(hoverY * 4.0F * MP4FocusState.progress(1.0F)));
+      poseStack.mulPose(Axis.YP.rotationDegrees(hoverX * 4.0F * MP4FocusState.progress(1.0F)));
+      poseStack.translate(-pivotX, -pivotY, 0.0F);
+      publishProjectedQuad(poseStack.last().pose(), bx0, by0, 0.02F, bx1, by1, 0.02F, 0.02F, 0.02F);
+      collector.submitCustomGeometry(poseStack, RenderType.entityCutout(bodyTextureId), (pose, buffer) -> {
+         emitSolidQuad(buffer, pose, bx1, by0, -0.035F, bx0, by0, -0.035F, -halfWidth, halfHeight, -0.035F, halfWidth, halfHeight, -0.035F, -14670543);
+         emitSolidQuad(buffer, pose, bx0, by1, -0.035F, bx1, by1, -0.035F, halfWidth, -halfHeight, -0.035F, -halfWidth, -halfHeight, -0.035F, -15197147);
+         emitSolidQuad(buffer, pose, bx0, by0, -0.035F, -halfWidth, halfHeight, -0.035F, -halfWidth, -halfHeight, -0.035F, bx0, by1, -0.035F, -14407114);
+         emitSolidQuad(buffer, pose, bx1, by0, -0.035F, halfWidth, halfHeight, -0.035F, halfWidth, -halfHeight, -0.035F, bx1, by1, -0.035F, -12893356);
+         emitSolidQuad(buffer, pose, bx0, by1, 0.02F, bx0, by0, 0.02F, bx0, by0, -0.035F, bx0, by1, -0.035F, -14407114);
+         emitSolidQuad(buffer, pose, bx1, by0, 0.02F, bx1, by1, 0.02F, bx1, by1, -0.035F, bx1, by0, -0.035F, -12893356);
+         emitSolidQuad(buffer, pose, bx1, by0, 0.02F, bx0, by0, 0.02F, bx0, by0, -0.035F, bx1, by0, -0.035F, -12103582);
+         emitSolidQuad(buffer, pose, bx0, by1, 0.02F, bx1, by1, 0.02F, bx1, by1, -0.035F, bx0, by1, -0.035F, -15197147);
+         emitSolidQuad(buffer, pose, bx0, by0, 0.02F, bx0, by1, 0.02F, bx1, by1, 0.02F, bx1, by0, 0.02F, -16448249);
+         emitSideButton(buffer, pose, bx1 + 0.012F, halfHeight * 0.78F, halfHeight, 0.038F, 0.165F, halfWidth, -9932155);
+         emitSideButton(buffer, pose, bx0 - 0.012F, halfHeight * 0.74F, halfHeight, 0.038F, 0.145F, halfWidth, -10655363);
+         emitSideButton(buffer, pose, bx0 - 0.012F, halfHeight * 0.52F, halfHeight, 0.038F, 0.145F, halfWidth, -10655363);
+      });
+      submitNv12VideoLayer(poseStack, collector, deviceId, bx0, by0, bx1, by1, 0.02F, 0.02F, 0.02F, 0.02F);
+      boolean splitGuiAroundVideo = MP4FocusState.visualLandscape(1.0F)
+         && MP4FocusState.videoEnabled()
+         && MP4FocusState.playing()
+         && MP4HandheldVideoClient.latestFrame(deviceId) != null
+         && !MP4BiliLoginOverlay.visible();
+      collector.submitCustomGeometry(
+         poseStack,
+         splitGuiAroundVideo ? RenderType.entityTranslucent(textureId) : RenderType.entityCutout(textureId),
+         (pose, buffer) -> {
+            if (splitGuiAroundVideo) {
+               if (MP4FocusState.controlsVisible()) {
+                  emitLandscapeGuiRect(buffer, pose, bx0, by0, bx1, by1, 0.022F, flipGuiV, 0.0F, 0.0F, 448.0F, 10.0F);
+                  emitLandscapeGuiRect(buffer, pose, bx0, by0, bx1, by1, 0.022F, flipGuiV, 0.0F, 246.0F, 448.0F, 256.0F);
+                  emitLandscapeGuiRect(buffer, pose, bx0, by0, bx1, by1, 0.022F, flipGuiV, 0.0F, 10.0F, 10.0F, 246.0F);
+                  emitLandscapeGuiRect(buffer, pose, bx0, by0, bx1, by1, 0.022F, flipGuiV, 438.0F, 10.0F, 448.0F, 246.0F);
+                  emitLandscapeGuiRect(buffer, pose, bx0, by0, bx1, by1, 0.022F, flipGuiV, 14.0F, 14.0F, 434.0F, 40.0F);
+                  emitLandscapeGuiRect(buffer, pose, bx0, by0, bx1, by1, 0.022F, flipGuiV, 16.0F, 171.0F, 432.0F, 237.0F);
+               } else {
+                  String resolutionLabel = MP4HandheldVideoClient.currentResolutionLabel(deviceId);
+                  int resolutionWidth = textWidth(resolutionLabel.isBlank() ? MP4FocusState.quality() : resolutionLabel);
+                  emitLandscapeGuiRect(
+                     buffer, pose, bx0, by0, bx1, by1, 0.022F, flipGuiV, 360.0F, 16.0F, Math.min(438.0F, 360.0F + resolutionWidth + 4.0F), 30.0F
+                  );
+               }
+
+               String subtitle = MP4HandheldVideoClient.currentSubtitle(deviceId);
+               if (MP4FocusState.lyricsEnabled() && !subtitle.isBlank()) {
+                  int subtitleWidth = Math.min(420, Math.max(36, textWidth(subtitle) + 18));
+                  float subtitleLeft = 224.0F - subtitleWidth / 2.0F;
+                  float subtitleY = MP4FocusState.controlsVisible() ? 148.0F : 196.0F;
+                  emitLandscapeGuiRect(
+                     buffer,
+                     pose,
+                     bx0,
+                     by0,
+                     bx1,
+                     by1,
+                     0.022F,
+                     flipGuiV,
+                     Math.max(10.0F, subtitleLeft),
+                     subtitleY,
+                     Math.min(438.0F, subtitleLeft + subtitleWidth),
+                     subtitleY + 17.0F
+                  );
+               }
+
+               if (MP4FocusState.playlistOpen()) {
+                  emitLandscapeGuiRect(buffer, pose, bx0, by0, bx1, by1, 0.022F, flipGuiV, 72.0F, 44.0F, 376.0F, 120.0F);
+               }
+
+               if (MP4FocusState.subtitleMenuOpen() && MP4FocusState.controlsVisible()) {
+                  emitLandscapeGuiRect(buffer, pose, bx0, by0, bx1, by1, 0.022F, flipGuiV, 232.0F, 48.0F, 340.0F, 162.0F);
+               }
+
+               if (MP4FocusState.qualityMenuOpen() && MP4FocusState.controlsVisible()) {
+                  emitLandscapeGuiRect(buffer, pose, bx0, by0, bx1, by1, 0.022F, flipGuiV, 318.0F, 42.0F, 412.0F, 174.0F);
+               }
+            } else {
+               emitGuiRect(buffer, pose, bx0, by0, bx1, by1, 0.022F, flipGuiV, 0.0F, 0.0F, MP4GuiTexture.WIDTH, MP4GuiTexture.HEIGHT);
+            }
+         }
+      );
+      poseStack.popPose();
+   }
+
+   private static void publishProjectedQuad(Matrix4f modelMatrix, float bx0, float by0, float b0z, float bx1, float by1, float b1z, float b2z, float b3z) {
+      if (MP4FocusState.active() && projectedInputEnabled()) {
+         Minecraft minecraft = Minecraft.getInstance();
+         Window window = minecraft.getWindow();
+         int physicalWidth = Math.max(1, window.getWidth());
+         int physicalHeight = Math.max(1, window.getHeight());
+         int guiWidth = Math.max(1, minecraft.getWindow().getGuiScaledWidth());
+         int guiHeight = Math.max(1, minecraft.getWindow().getGuiScaledHeight());
+         MP4ItemScreenRenderer.ScreenPoint topLeft = projectToGui(modelMatrix, bx0, by0, b0z, physicalWidth, physicalHeight, guiWidth, guiHeight);
+         MP4ItemScreenRenderer.ScreenPoint bottomLeft = projectToGui(modelMatrix, bx0, by1, b1z, physicalWidth, physicalHeight, guiWidth, guiHeight);
+         MP4ItemScreenRenderer.ScreenPoint bottomRight = projectToGui(modelMatrix, bx1, by1, b2z, physicalWidth, physicalHeight, guiWidth, guiHeight);
+         MP4ItemScreenRenderer.ScreenPoint topRight = projectToGui(modelMatrix, bx1, by0, b3z, physicalWidth, physicalHeight, guiWidth, guiHeight);
+         if (topLeft != null && bottomLeft != null && bottomRight != null && topRight != null) {
+            MP4FocusState.updateProjectedQuad(
+               topLeft.x(),
+               topLeft.y(),
+               topRight.x(),
+               topRight.y(),
+               bottomRight.x(),
+               bottomRight.y(),
+               bottomLeft.x(),
+               bottomLeft.y(),
+               guiWidth,
+               guiHeight,
+               MP4FocusState.landscape()
+            );
+         }
+      }
+   }
+
+   private static MP4ItemScreenRenderer.ScreenPoint projectToGui(
+      Matrix4f modelMatrix, float x, float y, float z, int physicalWidth, int physicalHeight, int guiWidth, int guiHeight
+   ) {
+      Matrix4f projection = firstPersonProjection(physicalWidth, physicalHeight);
+      Vector4f clip = new Vector4f(x, y, z, 1.0F).mul(modelMatrix).mul(RenderSystem.getModelViewMatrix()).mul(projection);
+      if (Math.abs(clip.w()) < 1.0E-5F) {
+         return null;
+      } else {
+         float ndcX = clip.x() / clip.w();
+         float ndcY = clip.y() / clip.w();
+         float screenX = (ndcX * 0.5F + 0.5F) * physicalWidth;
+         float screenY = (0.5F - ndcY * 0.5F) * physicalHeight;
+         return new MP4ItemScreenRenderer.ScreenPoint(
+            screenX * guiWidth / Math.max(1.0F, (float)physicalWidth), screenY * guiHeight / Math.max(1.0F, (float)physicalHeight)
+         );
+      }
+   }
+
+   private static boolean projectedInputEnabled() {
+      return ClientDisplayProperties.mp4ProjectedInputEnabled();
+   }
+
+   private static Matrix4f firstPersonProjection(int physicalWidth, int physicalHeight) {
+      float aspect = (float)physicalWidth / Math.max(1, physicalHeight);
+      return new Matrix4f().perspective((float)Math.toRadians(70.0), aspect, 0.05F, Minecraft.getInstance().gameRenderer.getDepthFar());
+   }
+
+   private static void submitNv12VideoLayer(
+      PoseStack poseStack,
+      PortSubmitNodeCollector collector,
+      UUID deviceId,
+      float bx0,
+      float by0,
+      float bx1,
+      float by1,
+      float b0z,
+      float b1z,
+      float b2z,
+      float b3z
+   ) {
+      if (deviceId != null) {
+         if (MP4FocusState.visualLandscape(1.0F) && MP4FocusState.videoEnabled() && MP4FocusState.playing()) {
+            float inset = 8.0F;
+            float right = MP4GuiTexture.HEIGHT - 10.0F + 2.0F;
+            float bottom = MP4GuiTexture.WIDTH - 10.0F + 2.0F;
+            MP4ItemScreenRenderer.SurfacePoint topLeft = landscapeSurfacePoint(inset, inset, bx0, by0, bx1, by1, b0z, b1z, b2z, b3z);
+            MP4ItemScreenRenderer.SurfacePoint bottomLeft = landscapeSurfacePoint(inset, bottom, bx0, by0, bx1, by1, b0z, b1z, b2z, b3z);
+            MP4ItemScreenRenderer.SurfacePoint bottomRight = landscapeSurfacePoint(right, bottom, bx0, by0, bx1, by1, b0z, b1z, b2z, b3z);
+            MP4ItemScreenRenderer.SurfacePoint topRight = landscapeSurfacePoint(right, inset, bx0, by0, bx1, by1, b0z, b1z, b2z, b3z);
+            MP4HandheldVideoClient.markVisible(deviceId);
+            boolean useRgbaFallback = IrisShaderpackCompat.isShaderPackInUse();
+            MP4RgbaVideoLayer rgbaLayer = MP4RgbaVideoLayer.forDevice(deviceId);
+            boolean rgba = useRgbaFallback && rgbaLayer.uploadLatest(deviceId);
+            MP4Nv12VideoLayer layer = MP4Nv12VideoLayer.forDevice(deviceId);
+            if (rgba || layer.uploadLatest(deviceId) && layer.textureSet() != null) {
+               collector.submitCustomGeometry(
+                  poseStack,
+                  rgba
+                     ? RenderType.entityCutout(rgbaLayer.textureId())
+                     : YuvVideoRenderTypes.nv12Entity(layer.textureSet().yId(), layer.textureSet().uId(), layer.textureSet().vId()),
+                  (pose, buffer) -> {
+                     emitQuad(
+                        buffer,
+                        pose,
+                        topLeft.x(),
+                        topLeft.y(),
+                        topLeft.z(),
+                        bottomLeft.x(),
+                        bottomLeft.y(),
+                        bottomLeft.z(),
+                        bottomRight.x(),
+                        bottomRight.y(),
+                        bottomRight.z(),
+                        topRight.x(),
+                        topRight.y(),
+                        topRight.z(),
+                        false
+                     );
+                     emitQuad(
+                        buffer,
+                        pose,
+                        topLeft.x(),
+                        topLeft.y(),
+                        topLeft.z(),
+                        bottomLeft.x(),
+                        bottomLeft.y(),
+                        bottomLeft.z(),
+                        bottomRight.x(),
+                        bottomRight.y(),
+                        bottomRight.z(),
+                        topRight.x(),
+                        topRight.y(),
+                        topRight.z(),
+                        true
+                     );
+                  }
+               );
+            }
+         }
+      }
+   }
+
+   private static MP4ItemScreenRenderer.SurfacePoint landscapeSurfacePoint(
+      float landscapeX, float landscapeY, float bx0, float by0, float bx1, float by1, float b0z, float b1z, float b2z, float b3z
+   ) {
+      float u = Math.max(0.0F, Math.min(1.0F, landscapeY / MP4GuiTexture.WIDTH));
+      float v = Math.max(0.0F, Math.min(1.0F, (MP4GuiTexture.HEIGHT - 1.0F - landscapeX) / MP4GuiTexture.HEIGHT));
+      float x = lerp(bx0, bx1, u);
+      float y = lerp(by0, by1, v);
+      float leftZ = lerp(b0z, b1z, v);
+      float rightZ = lerp(b3z, b2z, v);
+      return new MP4ItemScreenRenderer.SurfacePoint(x, y, lerp(leftZ, rightZ, u) + 0.001F);
+   }
+
+   private static float deviceRotationDegrees(float partialTick) {
+      return MP4FocusState.deviceRotationDegrees(partialTick);
+   }
+
+   private static float focusedHandFollowDepth() {
+      float depth = MP4FocusState.progress(1.0F) * 0.055F;
+      float hoverX = MP4FocusState.hoverX() * handHoverXFlip(1.0F);
+      float hoverY = MP4FocusState.hoverY() * handHoverYFlip(1.0F);
+      return (-hoverX * 0.85F - hoverY * 0.65F) * depth;
+   }
+
+   private static float guiHoverFlip(float partialTick) {
+      return 1.0F;
+   }
+
+   private static float handHoverXFlip(float partialTick) {
+      return 1.0F;
+   }
+
+   private static float handHoverYFlip(float partialTick) {
+      return lerp(1.0F, -1.0F, MP4FocusState.landscapeTransformProgress(partialTick));
+   }
+
+   private static int textWidth(String text) {
+      Minecraft minecraft = Minecraft.getInstance();
+      Font font = minecraft != null ? minecraft.font : null;
+      return font != null && text != null ? font.width(text) : 0;
+   }
+
+   private static MP4GuiTexture textureFor(UUID deviceId) {
+      PlaybackSourceId key = deviceId != null ? PlaybackSourceId.of(deviceId) : FALLBACK_SOURCE_ID;
+      return GUI_TEXTURES.computeIfAbsent(key, id -> new MP4GuiTexture(id.toString().replace('-', '_')));
+   }
+
+   private static void emitQuad(
+      VertexConsumer buffer,
+      Pose pose,
+      float p0x,
+      float p0y,
+      float p0z,
+      float p1x,
+      float p1y,
+      float p1z,
+      float p2x,
+      float p2y,
+      float p2z,
+      float p3x,
+      float p3y,
+      float p3z,
+      boolean reverse
+   ) {
+      emitQuad(buffer, pose, p0x, p0y, p0z, p1x, p1y, p1z, p2x, p2y, p2z, p3x, p3y, p3z, reverse, false);
+   }
+
+   private static void emitQuad(
+      VertexConsumer buffer,
+      Pose pose,
+      float p0x,
+      float p0y,
+      float p0z,
+      float p1x,
+      float p1y,
+      float p1z,
+      float p2x,
+      float p2y,
+      float p2z,
+      float p3x,
+      float p3y,
+      float p3z,
+      boolean reverse,
+      boolean flipV
+   ) {
+      float v0 = flipV ? 1.0F : 0.0F;
+      float v1 = flipV ? 0.0F : 1.0F;
+      if (reverse) {
+         vertex(buffer, pose, p3x, p3y, p3z, 1.0F, v0);
+         vertex(buffer, pose, p2x, p2y, p2z, 1.0F, v1);
+         vertex(buffer, pose, p1x, p1y, p1z, 0.0F, v1);
+         vertex(buffer, pose, p0x, p0y, p0z, 0.0F, v0);
+      } else {
+         vertex(buffer, pose, p0x, p0y, p0z, 0.0F, v0);
+         vertex(buffer, pose, p1x, p1y, p1z, 0.0F, v1);
+         vertex(buffer, pose, p2x, p2y, p2z, 1.0F, v1);
+         vertex(buffer, pose, p3x, p3y, p3z, 1.0F, v0);
+      }
+   }
+
+   private static void emitLandscapeGuiRect(
+      VertexConsumer buffer, Pose pose, float bx0, float by0, float bx1, float by1, float z, boolean flipV, float x0, float y0, float x1, float y1
+   ) {
+      emitGuiRect(buffer, pose, bx0, by0, bx1, by1, z, flipV, y0, MP4GuiTexture.HEIGHT - x1, y1, MP4GuiTexture.HEIGHT - x0);
+   }
+
+   private static void emitGuiRect(
+      VertexConsumer buffer, Pose pose, float bx0, float by0, float bx1, float by1, float z, boolean flipV, float px0, float py0, float px1, float py1
+   ) {
+      float left = lerp(bx0, bx1, px0 / MP4GuiTexture.WIDTH);
+      float right = lerp(bx0, bx1, px1 / MP4GuiTexture.WIDTH);
+      float top = lerp(by0, by1, py0 / MP4GuiTexture.HEIGHT);
+      float bottom = lerp(by0, by1, py1 / MP4GuiTexture.HEIGHT);
+      float u0 = px0 / MP4GuiTexture.WIDTH;
+      float u1 = px1 / MP4GuiTexture.WIDTH;
+      float rawV0 = py0 / MP4GuiTexture.HEIGHT;
+      float rawV1 = py1 / MP4GuiTexture.HEIGHT;
+      float vTop = flipV ? 1.0F - rawV0 : rawV0;
+      float vBottom = flipV ? 1.0F - rawV1 : rawV1;
+      vertex(buffer, pose, left, top, z, u0, vTop);
+      vertex(buffer, pose, left, bottom, z, u0, vBottom);
+      vertex(buffer, pose, right, bottom, z, u1, vBottom);
+      vertex(buffer, pose, right, top, z, u1, vTop);
+      vertex(buffer, pose, right, top, z, u1, vTop);
+      vertex(buffer, pose, right, bottom, z, u1, vBottom);
+      vertex(buffer, pose, left, bottom, z, u0, vBottom);
+      vertex(buffer, pose, left, top, z, u0, vTop);
+   }
+
+   private static void emitSideButton(
+      VertexConsumer buffer, Pose pose, float x, float centerY, float halfHeight, float width, float height, float halfWidth, int color
+   ) {
+      float sign = x > 0.0F ? 1.0F : -1.0F;
+      float innerX = x - sign * width;
+      float y0 = centerY + height * 0.5F;
+      float y1 = centerY - height * 0.5F;
+      float frontInnerTop = 0.01F;
+      float frontOuterTop = 0.01F;
+      float frontOuterBottom = 0.01F;
+      float frontInnerBottom = 0.01F;
+      float backInnerTop = frontInnerTop - 0.0396F;
+      float backOuterTop = frontOuterTop - 0.0396F;
+      float backOuterBottom = frontOuterBottom - 0.0396F;
+      float backInnerBottom = frontInnerBottom - 0.0396F;
+      int sideColor = darker(color);
+      int capColor = darker(color, 0.76F);
+      int backColor = darker(color, 0.48F);
+      emitSolidQuad(buffer, pose, innerX, y0, frontInnerTop, x, y0, frontOuterTop, x, y1, frontOuterBottom, innerX, y1, frontInnerBottom, color);
+      emitSolidQuad(buffer, pose, x, y0, frontOuterTop, x, y0, backOuterTop, x, y1, backOuterBottom, x, y1, frontOuterBottom, sideColor);
+      emitSolidQuad(buffer, pose, innerX, y0, backInnerTop, innerX, y0, frontInnerTop, innerX, y1, frontInnerBottom, innerX, y1, backInnerBottom, sideColor);
+      emitSolidQuad(buffer, pose, innerX, y0, backInnerTop, x, y0, backOuterTop, x, y0, frontOuterTop, innerX, y0, frontInnerTop, capColor);
+      emitSolidQuad(buffer, pose, innerX, y1, frontInnerBottom, x, y1, frontOuterBottom, x, y1, backOuterBottom, innerX, y1, backInnerBottom, capColor);
+      emitSolidQuad(buffer, pose, x, y0, backOuterTop, innerX, y0, backInnerTop, innerX, y1, backInnerBottom, x, y1, backOuterBottom, backColor);
+   }
+
+   private static void emitSolidQuad(
+      VertexConsumer buffer,
+      Pose pose,
+      float ax,
+      float ay,
+      float az,
+      float bx,
+      float by,
+      float bz,
+      float cx,
+      float cy,
+      float cz,
+      float dx,
+      float dy,
+      float dz,
+      int color
+   ) {
+      solidVertex(buffer, pose, ax, ay, az, color);
+      solidVertex(buffer, pose, bx, by, bz, color);
+      solidVertex(buffer, pose, cx, cy, cz, color);
+      solidVertex(buffer, pose, dx, dy, dz, color);
+   }
+
+   private static void solidVertex(VertexConsumer buffer, Pose pose, float x, float y, float z, int color) {
+      buffer.addVertex(pose, x, y, z)
+         .setColor(color)
+         .setUv(0.01F, 0.01F)
+         .setOverlay(OverlayTexture.NO_OVERLAY)
+         .setLight(15728880)
+         .setNormal(pose, 0.0F, 0.0F, 1.0F);
+   }
+
+   private static int darker(int color) {
+      return darker(color, 0.58F);
+   }
+
+   private static int darker(int color, float scale) {
+      int a = color & 0xFF000000;
+      int r = Math.round((color >> 16 & 0xFF) * scale);
+      int g = Math.round((color >> 8 & 0xFF) * scale);
+      int b = Math.round((color & 0xFF) * scale);
+      return a | r << 16 | g << 8 | b;
+   }
+
+   private static void vertex(VertexConsumer buffer, Pose pose, float x, float y, float z, float u, float v) {
+      RenderVertexUtils.texturedVertex(buffer, pose, x, y, z, u, v);
+   }
+
+   private record ScreenPoint(float x, float y) {
+   }
+
+   private record SurfacePoint(float x, float y, float z) {
+   }
+}

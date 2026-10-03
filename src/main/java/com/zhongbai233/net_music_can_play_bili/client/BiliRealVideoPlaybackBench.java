@@ -1,0 +1,838 @@
+package com.zhongbai233.net_music_can_play_bili.client;
+
+import com.mojang.logging.LogUtils;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoPipelineProperties;
+import com.zhongbai233.net_music_can_play_bili.media.codec.Fmp4NativeVideoDecoder;
+import com.zhongbai233.net_music_can_play_bili.util.concurrent.NetMusicThreadFactory;
+import java.util.Arrays;
+import java.util.Locale;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
+import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.Component;
+import org.slf4j.Logger;
+
+public final class BiliRealVideoPlaybackBench {
+   private static final Logger LOGGER = LogUtils.getLogger();
+   private static final AtomicBoolean started = new AtomicBoolean(false);
+   private static final ExecutorService BENCH_EXECUTOR = Executors.newSingleThreadExecutor(NetMusicThreadFactory.daemon("real-video-bench"));
+   private static volatile BiliRealVideoPlaybackBench.RunSnapshot runSnapshot = new BiliRealVideoPlaybackBench.RunSnapshot(
+      BiliRealVideoPlaybackBench.RunState.IDLE, "", 0, 0, "not started"
+   );
+   private static final boolean BENCH_FEATURES_ENABLED = VideoFeatureFlags.benchFeaturesEnabled();
+   private static final boolean ENABLED = VideoFeatureFlags.advancedBoolean("ncpb.video.real_bench", false);
+   private static final String VIDEO_ID = VideoFeatureFlags.advancedString("ncpb.video.real_bench.bv", "BV1GJ411x7h7");
+   private static final int MAX_OUTPUT_FPS = VideoFeatureFlags.advancedInt("ncpb.video.real_bench.max_fps", 30);
+   private static final int MIN_1080P_FPS = VideoFeatureFlags.advancedInt("ncpb.video.real_bench.min_1080p_fps", 8);
+   private static final int CAP_1080P_FPS = VideoFeatureFlags.advancedInt("ncpb.video.real_bench.cap_1080p_fps", 10);
+   private static final int CAP_4K_FPS = VideoFeatureFlags.advancedInt("ncpb.video.real_bench.cap_4k_fps", 3);
+   private static final int CAP_8K_FPS = VideoFeatureFlags.advancedInt("ncpb.video.real_bench.cap_8k_fps", 1);
+   private static final int FRAMES_PER_STAGE = VideoFeatureFlags.advancedInt("ncpb.video.real_bench.frames", 120);
+   private static final int WARMUP_FRAMES = VideoFeatureFlags.advancedInt("ncpb.video.real_bench.warmup_frames", 10);
+   private static final int[] QUALITY_STEPS = parseIntSteps(VideoFeatureFlags.advancedString("ncpb.video.real_bench.qualities", "16,32,64,80,112,116,120,127"));
+   private static final boolean REALTIME_PLAYBACK = Boolean.parseBoolean(VideoFeatureFlags.advancedString("ncpb.video.real_bench.realtime", "true"));
+   private static final boolean DECODE_ONLY = Boolean.parseBoolean(VideoFeatureFlags.advancedString("ncpb.video.real_bench.decode_only", "false"));
+   private static final boolean DECODE_NO_OUTPUT = Boolean.parseBoolean(VideoFeatureFlags.advancedString("ncpb.video.real_bench.decode_no_output", "false"));
+   private static final boolean ADAPTIVE_FPS_CAP = Boolean.parseBoolean(VideoFeatureFlags.advancedString("ncpb.video.real_bench.adaptive_fps_cap", "false"));
+   private static final boolean STOP_ON_THRESHOLD = Boolean.parseBoolean(VideoFeatureFlags.advancedString("ncpb.video.real_bench.stop_on_threshold", "false"));
+   private static final double STOP_AVG_STAGE_MS = Double.parseDouble(VideoFeatureFlags.advancedString("ncpb.video.real_bench.stop_avg_stage_ms", "45"));
+   private static final double STOP_MAX_UPLOAD_MS = Double.parseDouble(VideoFeatureFlags.advancedString("ncpb.video.real_bench.stop_max_upload_ms", "60"));
+   private static final boolean START_PREVIEW_AFTER_BENCH = Boolean.parseBoolean(VideoFeatureFlags.advancedString("ncpb.video.real_bench.preview", "true"));
+   private static final boolean PREVIEW_PREFER_DEMO = Boolean.parseBoolean(
+      VideoFeatureFlags.advancedString("ncpb.video.real_bench.preview.prefer_demo", "false")
+   );
+   private static final boolean PREFER_NATIVE = Boolean.parseBoolean(VideoFeatureFlags.advancedString("ncpb.video.real_bench.native", "true"));
+   private static final String NATIVE_HWACCEL = VideoFeatureFlags.advancedString("ncpb.video.native.hwaccel", "auto").trim();
+   private static final String OUTPUT_FORMAT = VideoFeatureFlags.advancedString("ncpb.video.real_bench.output_format", "nv12").trim().toLowerCase(Locale.ROOT);
+
+   private BiliRealVideoPlaybackBench() {
+   }
+
+   public static boolean tryStart() {
+      if (!BENCH_FEATURES_ENABLED) {
+         return false;
+      } else if (!ENABLED) {
+         return false;
+      } else if (!started.compareAndSet(false, true)) {
+         return true;
+      } else {
+         markRunning();
+         CompletableFuture.runAsync(BiliRealVideoPlaybackBench::runBench, BENCH_EXECUTOR).orTimeout(180L, TimeUnit.SECONDS).exceptionally(e -> {
+            markFailed("timeout/failure: " + e);
+            LOGGER.error("真实视频播放 Bench 超时/失败", e);
+            return null;
+         });
+         return true;
+      }
+   }
+
+   public static boolean startCommand(boolean ignoreSlowFrames) {
+      if (!started.compareAndSet(false, true)) {
+         return false;
+      } else {
+         markRunning();
+         CompletableFuture.runAsync(() -> runBench(ignoreSlowFrames, true, BiliRealVideoPlaybackBench::chat), BENCH_EXECUTOR)
+            .orTimeout(180L, TimeUnit.SECONDS)
+            .exceptionally(e -> {
+               markFailed("command timeout/failure: " + e);
+               LOGGER.error("真实视频播放 Bench 命令超时/失败", e);
+               chat("B站真实解析Bench失败/超时，详细错误见 latest.log");
+               return null;
+            });
+         return true;
+      }
+   }
+
+   private static void runBench() {
+      runBench(!STOP_ON_THRESHOLD, false, null);
+   }
+
+   private static void runBench(boolean ignoreSlowFrames, boolean commandMode, Consumer<String> reporter) {
+      LOGGER.info("══════════════════════════════════════════");
+      LOGGER.info("  真实 B站视频播放 Bench 开始");
+      report(reporter, "B站真实解析Bench开始：" + slowFramePolicy(ignoreSlowFrames) + "；命令模式不启动持续预览");
+      LOGGER.info(
+         "  videoId={}, maxOutputFps={}, frames/stage={}, warmupFrames={}, qualitySteps={}",
+         new Object[]{VIDEO_ID, MAX_OUTPUT_FPS, FRAMES_PER_STAGE, WARMUP_FRAMES, Arrays.toString(QUALITY_STEPS)}
+      );
+      LOGGER.info(
+         "  realtimePlayback={}, decodeOnly={}, decodeNoOutput={}, adaptiveFpsCap={}, stopOnThreshold={}, previewPreferDemo={}, preferNative={}",
+         new Object[]{REALTIME_PLAYBACK, DECODE_ONLY, DECODE_NO_OUTPUT, ADAPTIVE_FPS_CAP, !ignoreSlowFrames, PREVIEW_PREFER_DEMO, PREFER_NATIVE}
+      );
+      LOGGER.info("  outputFormat={}", OUTPUT_FORMAT);
+      LOGGER.info(
+         "  画质阶梯说明: 125=HDR、126=杜比视界、129=HDR Vivid，属于特性格式；默认压测只跑分辨率/fps阶梯 {}", Arrays.stream(QUALITY_STEPS).mapToObj(BiliApiClient::qualityLabel).toList()
+      );
+      LOGGER.info("  路线: B站 DASH → {} → GPU texture upload → SubmitCustomGeometry", "native FFmpeg JNI " + outputFormatLabel());
+      LOGGER.info("══════════════════════════════════════════");
+      BiliApiClient.VideoId vid = BiliApiClient.extractVideoId(VIDEO_ID);
+      if (vid == null) {
+         markFailed("invalid video id");
+         LOGGER.warn("真实视频 Bench 的 B站视频 ID 无效: {}", VIDEO_ID);
+         report(reporter, "B站真实解析Bench失败：视频 ID 无效 " + VIDEO_ID);
+      } else {
+         BiliApiClient.VideoInfo info;
+         try {
+            long startMs = System.currentTimeMillis();
+            info = BiliApiClient.getVideoInfo(vid);
+            LOGGER.info(
+               "  视频信息: title='{}', cid={}, duration={}s, page={}/{}, 耗时={}ms",
+               new Object[]{info.displayTitle(), info.cid(), info.duration(), info.page(), info.totalPages(), System.currentTimeMillis() - startMs}
+            );
+            report(reporter, "B站真实解析Bench视频：" + info.displayTitle() + "，duration=" + info.duration() + "s");
+         } catch (Exception var15) {
+            markFailed("video info failed: " + var15);
+            LOGGER.error("真实视频 Bench 获取视频信息失败", var15);
+            report(reporter, "B站真实解析Bench获取视频信息失败，详见 latest.log");
+            return;
+         }
+
+         BiliRealVideoPlaybackBench.StageResult lastUsableResult = null;
+         BiliRealVideoPlaybackBench.StageResult highestPlayableResult = null;
+         BiliRealVideoPlaybackBench.StageResult demoResult = null;
+         int decodedStages = 0;
+         int decodedFrames = 0;
+
+         for (int quality : QUALITY_STEPS) {
+            report(reporter, "B站真实解析Bench阶段：" + BiliApiClient.qualityLabel(quality));
+            BiliRealVideoPlaybackBench.StageResult result = runQualityStage(vid, info.cid(), quality, reporter);
+            if (result != null) {
+               if (result.frames() > 0) {
+                  decodedStages++;
+                  decodedFrames += result.frames();
+                  markProgress(decodedStages, decodedFrames, "decoded " + BiliApiClient.qualityLabel(quality));
+               }
+
+               logResult(result);
+               report(
+                  reporter,
+                  "B站真实解析Bench结果 "
+                     + BiliApiClient.qualityLabel(quality)
+                     + " → actual="
+                     + BiliApiClient.qualityLabel(result.stream().quality())
+                     + " "
+                     + result.stream().displaySize()
+                     + ", avgDecode="
+                     + formatMs(result.avgDecodeMs())
+                     + "ms, avgUpload="
+                     + formatMs(result.avgUploadMs())
+                     + "ms, fps="
+                     + String.format(Locale.ROOT, "%.1f", result.actualLoopFps())
+               );
+               if (isUsableForRequestedMode(result)) {
+                  lastUsableResult = result;
+                  if (isSmoothPlaybackResult(result)) {
+                     highestPlayableResult = result;
+                  }
+
+                  if (isMuscleDemoResult(result)) {
+                     demoResult = result;
+                  }
+               }
+
+               if (!ignoreSlowFrames && shouldStopAfter(result)) {
+                  LOGGER.warn(
+                     "  达到停止阈值，终止后续更高质量真实视频测试。quality={}, stream={} {}", new Object[]{quality, result.stream().quality(), result.stream().displaySize()}
+                  );
+                  report(reporter, "B站真实解析Bench遇到过慢帧，停止后续更高画质：" + BiliApiClient.qualityLabel(quality));
+                  break;
+               }
+            }
+         }
+
+         BiliRealVideoPlaybackBench.StageResult previewResult = PREVIEW_PREFER_DEMO && demoResult != null
+            ? demoResult
+            : (highestPlayableResult != null ? highestPlayableResult : lastUsableNonDemoResult(lastUsableResult, demoResult));
+         if (!commandMode && !DECODE_ONLY && START_PREVIEW_AFTER_BENCH && previewResult != null) {
+            BiliApiClient.VideoStream stream = previewResult.stream();
+            int previewFps = previewResult.outputFps();
+            LOGGER.info(
+               "  Bench 后启动真实视频预览: quality={}, {}, {}, {}, fps={}, mode={}",
+               new Object[]{stream.quality(), stream.displaySize(), stream.codecName(), stream.frameRate(), previewFps, playbackMode(stream)}
+            );
+            Minecraft.getInstance()
+               .execute(
+                  () -> {
+                     VideoBillboardPreview.stop();
+                     VideoBillboardPreview.startBenchPreview(
+                        stream.baseUrl(),
+                        Math.max(1, stream.width()),
+                        Math.max(1, stream.height()),
+                        previewFps,
+                        stream.codecId(),
+                        PREFER_NATIVE,
+                        decoderOverrideFor(stream)
+                     );
+                  }
+               );
+         } else if (commandMode) {
+            Minecraft.getInstance().execute(() -> VideoBillboardPreview.stop());
+            report(reporter, "B站真实解析Bench命令模式：已关闭/跳过持续预览");
+         }
+
+         LOGGER.info("══════════════════════════════════════════");
+         LOGGER.info("  真实 B站视频播放 Bench 结束");
+         LOGGER.info("══════════════════════════════════════════");
+         report(reporter, "B站真实解析Bench结束，详细报告见 latest.log");
+         if (decodedStages > 0 && decodedFrames > 0) {
+            markSucceeded(decodedStages, decodedFrames);
+         } else {
+            markFailed("no decoded video frames");
+         }
+      }
+   }
+
+   public static BiliRealVideoPlaybackBench.RunSnapshot snapshot() {
+      return runSnapshot;
+   }
+
+   private static void markRunning() {
+      runSnapshot = new BiliRealVideoPlaybackBench.RunSnapshot(BiliRealVideoPlaybackBench.RunState.RUNNING, VIDEO_ID, 0, 0, "resolving video");
+   }
+
+   private static synchronized void markProgress(int decodedStages, int decodedFrames, String detail) {
+      if (runSnapshot.state() == BiliRealVideoPlaybackBench.RunState.RUNNING) {
+         runSnapshot = new BiliRealVideoPlaybackBench.RunSnapshot(BiliRealVideoPlaybackBench.RunState.RUNNING, VIDEO_ID, decodedStages, decodedFrames, detail);
+      }
+   }
+
+   private static synchronized void markSucceeded(int decodedStages, int decodedFrames) {
+      if (runSnapshot.state() == BiliRealVideoPlaybackBench.RunState.RUNNING) {
+         runSnapshot = new BiliRealVideoPlaybackBench.RunSnapshot(
+            BiliRealVideoPlaybackBench.RunState.SUCCEEDED, VIDEO_ID, decodedStages, decodedFrames, "real DASH decode completed"
+         );
+      }
+   }
+
+   private static synchronized void markFailed(String detail) {
+      if (runSnapshot.state() != BiliRealVideoPlaybackBench.RunState.SUCCEEDED) {
+         runSnapshot = new BiliRealVideoPlaybackBench.RunSnapshot(
+            BiliRealVideoPlaybackBench.RunState.FAILED,
+            VIDEO_ID,
+            runSnapshot.decodedStages(),
+            runSnapshot.decodedFrames(),
+            detail != null ? detail : "unknown failure"
+         );
+      }
+   }
+
+   private static BiliRealVideoPlaybackBench.StageResult runQualityStage(BiliApiClient.VideoId vid, long cid, int quality, Consumer<String> reporter) {
+      BiliApiClient.VideoStream stream;
+      try {
+         long startMs = System.currentTimeMillis();
+         stream = BiliApiClient.getBestVideoStream(vid, cid, quality);
+         LOGGER.info(
+            "─────────────── Real Stage {} → actual {} {} {} {} sourceFps={} outputFps={} mode={} route={} ───────────────",
+            new Object[]{
+               BiliApiClient.qualityLabel(quality),
+               BiliApiClient.qualityLabel(stream.quality()),
+               stream.displaySize(),
+               stream.codecName(),
+               stream.codecs(),
+               stream.frameRate(),
+               outputFpsFor(stream),
+               playbackMode(stream),
+               routeDescription(stream)
+            }
+         );
+         LOGGER.info(
+            "  DASH URL 获取完成: urlPrefix={}, 耗时={}ms",
+            stream.baseUrl().substring(0, Math.min(120, stream.baseUrl().length())),
+            System.currentTimeMillis() - startMs
+         );
+         report(reporter, "B站真实解析Bench DASH完成：" + BiliApiClient.qualityLabel(stream.quality()) + " " + stream.displaySize() + " " + stream.codecName());
+      } catch (Exception var69) {
+         LOGGER.error("  Real Stage q{} 获取 DASH 视频流失败", quality, var69);
+         report(reporter, "B站真实解析Bench阶段失败：" + BiliApiClient.qualityLabel(quality) + " 获取 DASH 失败");
+         return null;
+      }
+
+      int targetWidth = Math.max(1, stream.width());
+      int targetHeight = Math.max(1, stream.height());
+      int outputFps = outputFpsFor(stream);
+      long totalDecodeNs = 0L;
+      long totalQueueWaitNs = 0L;
+      long totalNativeGetNs = 0L;
+      long totalDecodeOtherNs = 0L;
+      long totalUploadNs = 0L;
+      long totalLoopNs = 0L;
+      long maxDecodeNs = 0L;
+      long maxQueueWaitNs = 0L;
+      long maxNativeGetNs = 0L;
+      long maxDecodeOtherNs = 0L;
+      long maxUploadNs = 0L;
+      long totalMeasuredFrameBytes = 0L;
+      int directFrames = 0;
+      int heapFrames = 0;
+      int frames = 0;
+      int measuredFrames = 0;
+      long frameIntervalNs = outputFps > 0 ? 1000000000L / outputFps : 0L;
+      int warmupFrames = Math.max(0, Math.min(WARMUP_FRAMES, Math.max(0, FRAMES_PER_STAGE - 1)));
+      long stageStartNs = System.nanoTime();
+
+      try (AutoCloseable decoder = openDecoder(stream, targetWidth, targetHeight, outputFps)) {
+         for (int i = 0; i < FRAMES_PER_STAGE; i++) {
+            long frameStartNs = System.nanoTime();
+            long decodeStartNs = System.nanoTime();
+            Fmp4NativeVideoDecoder.DecodedFrame frame = nextDecodedFrame(decoder);
+            long decodeNs = System.nanoTime() - decodeStartNs;
+            if (frame == null) {
+               LOGGER.warn("  Real Stage q{} 提前结束：ffmpeg 输出 EOF，frames={}", quality, frames);
+               break;
+            }
+
+            long uploadNs = 0L;
+
+            try {
+               if (!DECODE_ONLY) {
+                  uploadNs = VideoBillboardPreview.uploadDecodedFrameSyncForBench(frame, targetWidth, targetHeight);
+                  if (uploadNs < 0L) {
+                     LOGGER.warn("  Real Stage q{} 提前结束：客户端世界已退出或上传失败", quality);
+                     break;
+                  }
+               }
+
+               frames++;
+               if (REALTIME_PLAYBACK && !DECODE_ONLY) {
+                  sleepUntilNextFrame(frameStartNs, frameIntervalNs);
+               }
+
+               long loopNs = System.nanoTime() - frameStartNs;
+               if (frames > warmupFrames) {
+                  long queueWaitNs = Math.max(0L, frame.queueWaitNanos());
+                  long nativeGetNs = Math.max(0L, frame.nativeGetNanos());
+                  long decodeOtherNs = Math.max(0L, decodeNs - queueWaitNs - nativeGetNs);
+                  totalDecodeNs += decodeNs;
+                  totalQueueWaitNs += queueWaitNs;
+                  totalNativeGetNs += nativeGetNs;
+                  totalDecodeOtherNs += decodeOtherNs;
+                  totalUploadNs += uploadNs;
+                  totalLoopNs += loopNs;
+                  maxDecodeNs = Math.max(maxDecodeNs, decodeNs);
+                  maxQueueWaitNs = Math.max(maxQueueWaitNs, queueWaitNs);
+                  maxNativeGetNs = Math.max(maxNativeGetNs, nativeGetNs);
+                  maxDecodeOtherNs = Math.max(maxDecodeOtherNs, decodeOtherNs);
+                  maxUploadNs = Math.max(maxUploadNs, uploadNs);
+                  if (frame.buffer() != null) {
+                     directFrames++;
+                  } else {
+                     heapFrames++;
+                  }
+
+                  int decodedFrameBytes = frame.byteLength();
+                  totalMeasuredFrameBytes += !DECODE_ONLY ? estimatedUploadBytes(decodedFrameBytes, targetWidth, targetHeight) : decodedFrameBytes;
+                  measuredFrames++;
+               }
+            } finally {
+               frame.close();
+            }
+
+            if ((i + 1) % Math.max(1, FRAMES_PER_STAGE / 4) == 0) {
+               LOGGER.info(
+                  "  Real Stage q{} 进度: frames={}/{}, measured={}, avgDecode={}ms(queue={}ms,native={}ms,other={}ms), avgUpload={}ms",
+                  new Object[]{
+                     quality,
+                     i + 1,
+                     FRAMES_PER_STAGE,
+                     measuredFrames,
+                     formatMs(totalDecodeNs / 1000000.0 / Math.max(1, measuredFrames)),
+                     formatMs(totalQueueWaitNs / 1000000.0 / Math.max(1, measuredFrames)),
+                     formatMs(totalNativeGetNs / 1000000.0 / Math.max(1, measuredFrames)),
+                     formatMs(totalDecodeOtherNs / 1000000.0 / Math.max(1, measuredFrames)),
+                     formatMs(totalUploadNs / 1000000.0 / Math.max(1, measuredFrames))
+                  }
+               );
+               report(
+                  reporter,
+                  "B站真实解析Bench进度 "
+                     + BiliApiClient.qualityLabel(quality)
+                     + ": frames="
+                     + (i + 1)
+                     + "/"
+                     + FRAMES_PER_STAGE
+                     + ", avgDecode="
+                     + formatMs(totalDecodeNs / 1000000.0 / Math.max(1, measuredFrames))
+                     + "ms, avgUpload="
+                     + formatMs(totalUploadNs / 1000000.0 / Math.max(1, measuredFrames))
+                     + "ms"
+               );
+            }
+         }
+      } catch (Exception var72) {
+         LOGGER.error("  Real Stage q{} 解码/上传失败", quality, var72);
+      }
+
+      long totalStageNs = System.nanoTime() - stageStartNs;
+      return new BiliRealVideoPlaybackBench.StageResult(
+         quality,
+         stream,
+         outputFps,
+         frames,
+         measuredFrames,
+         warmupFrames,
+         totalDecodeNs,
+         totalQueueWaitNs,
+         totalNativeGetNs,
+         totalDecodeOtherNs,
+         totalUploadNs,
+         totalLoopNs,
+         maxDecodeNs,
+         maxQueueWaitNs,
+         maxNativeGetNs,
+         maxDecodeOtherNs,
+         maxUploadNs,
+         totalMeasuredFrameBytes,
+         totalStageNs,
+         directFrames,
+         heapFrames
+      );
+   }
+
+   private static AutoCloseable openDecoder(BiliApiClient.VideoStream stream, int targetWidth, int targetHeight, int outputFps) throws Exception {
+      LOGGER.info("  使用 native FFmpeg JNI 解码链路: codecId={}, {}x{}, frames={}", new Object[]{stream.codecId(), targetWidth, targetHeight, FRAMES_PER_STAGE});
+      return new Fmp4NativeVideoDecoder(
+         stream.baseUrl(),
+         stream.codecId(),
+         targetWidth,
+         targetHeight,
+         FRAMES_PER_STAGE,
+         !DECODE_ONLY || !DECODE_NO_OUTPUT,
+         outputFormat(),
+         NATIVE_HWACCEL,
+         0L,
+         0L,
+         outputFps
+      );
+   }
+
+   private static Fmp4NativeVideoDecoder.DecodedFrame nextDecodedFrame(AutoCloseable decoder) throws Exception {
+      if (decoder instanceof Fmp4NativeVideoDecoder nativeDecoder) {
+         return nativeDecoder.getNextDecodedFrame();
+      } else {
+         throw new IllegalStateException("unsupported video decoder: " + decoder.getClass().getName());
+      }
+   }
+
+   private static void logResult(BiliRealVideoPlaybackBench.StageResult result) {
+      if (result.frames() <= 0) {
+         LOGGER.warn("  Real Stage q{} 无有效帧", result.requestedQuality());
+      } else {
+         BiliApiClient.VideoStream stream = result.stream();
+         double mibPerFrame = result.avgFrameMiB();
+         double rgbaMiBPerFrame = stream.width() * stream.height() * 4.0 / 1048576.0;
+         double relativeToRgba = mibPerFrame / Math.max(0.001, rgbaMiBPerFrame) * 100.0;
+         LOGGER.info(
+            "  Real Stage {} 结果: actual={}, {}, {}, {}, outputFormat={}, upload={}MiB/frame ({}% of RGBA), frames={}, measured={}, warmup={}",
+            new Object[]{
+               BiliApiClient.qualityLabel(result.requestedQuality()),
+               BiliApiClient.qualityLabel(stream.quality()),
+               stream.displaySize(),
+               stream.codecName(),
+               stream.frameRate(),
+               outputFormatLabel(),
+               String.format(Locale.ROOT, "%.2f", mibPerFrame),
+               String.format(Locale.ROOT, "%.1f", relativeToRgba),
+               result.frames(),
+               result.measuredFrames(),
+               result.warmupFrames()
+            }
+         );
+         LOGGER.info(
+            "    measuredAvgDecode={}ms, measuredMaxDecode={}ms, measuredAvgUpload={}ms, measuredMaxUpload={}ms, measuredAvgLoop/frame={}ms, measuredLoopFps={}, uploadBandwidth={}MiB/s, wallLoopFps={}",
+            new Object[]{
+               formatMs(result.avgDecodeMs()),
+               formatMs(result.maxDecodeMs()),
+               formatMs(result.avgUploadMs()),
+               formatMs(result.maxUploadMs()),
+               formatMs(result.avgStageMs()),
+               String.format(Locale.ROOT, "%.1f", result.actualLoopFps()),
+               String.format(Locale.ROOT, "%.1f", result.uploadBandwidthMiBps()),
+               String.format(Locale.ROOT, "%.1f", result.wallLoopFps())
+            }
+         );
+         LOGGER.info(
+            "    decodeBreakdown avg: queueWait={}ms, nativeGetFrame={}ms, other={}ms; max: queueWait={}ms, nativeGetFrame={}ms, other={}ms; frameStorage=direct:{}, heap:{}",
+            new Object[]{
+               formatMs(result.avgQueueWaitMs()),
+               formatMs(result.avgNativeGetMs()),
+               formatMs(result.avgDecodeOtherMs()),
+               formatMs(result.maxQueueWaitMs()),
+               formatMs(result.maxNativeGetMs()),
+               formatMs(result.maxDecodeOtherMs()),
+               result.directFrames(),
+               result.heapFrames()
+            }
+         );
+      }
+   }
+
+   private static int[] parseIntSteps(String raw) {
+      String[] parts = raw.split(",");
+      int[] result = new int[parts.length];
+      int count = 0;
+
+      for (String part : parts) {
+         try {
+            int value = Integer.parseInt(part.trim());
+            if (value > 0) {
+               result[count++] = value;
+            }
+         } catch (NumberFormatException var9) {
+         }
+      }
+
+      return count == 0 ? new int[]{16, 32, 64, 80} : Arrays.copyOf(result, count);
+   }
+
+   private static String formatMs(double ms) {
+      return String.format(Locale.ROOT, "%.2f", ms);
+   }
+
+   private static String slowFramePolicy(boolean ignoreSlowFrames) {
+      return ignoreSlowFrames ? "忽略过慢帧" : "遇到过慢帧停止";
+   }
+
+   private static void report(Consumer<String> reporter, String message) {
+      if (reporter != null) {
+         reporter.accept(message);
+      }
+   }
+
+   private static void chat(String message) {
+      Minecraft.getInstance().execute(() -> {
+         if (Minecraft.getInstance().player != null) {
+            Minecraft.getInstance().player.sendSystemMessage(Component.literal(message));
+         }
+      });
+   }
+
+   private static boolean isYuv420OutputRequested() {
+      return OUTPUT_FORMAT.equals("yuv")
+         || OUTPUT_FORMAT.equals("yuv420")
+         || OUTPUT_FORMAT.equals("yuv420_shader")
+         || OUTPUT_FORMAT.equals("yuv420_packed")
+         || OUTPUT_FORMAT.equals("packed_yuv420");
+   }
+
+   private static boolean isNv12OutputRequested() {
+      return OUTPUT_FORMAT.equals("nv12") || OUTPUT_FORMAT.equals("nv12_shader");
+   }
+
+   private static boolean isYuvOutputRequested() {
+      return isNv12OutputRequested() || isYuv420OutputRequested();
+   }
+
+   private static Fmp4NativeVideoDecoder.OutputFormat outputFormat() {
+      if (isNv12OutputRequested()) {
+         return Fmp4NativeVideoDecoder.OutputFormat.NV12;
+      } else {
+         return isYuv420OutputRequested() ? Fmp4NativeVideoDecoder.OutputFormat.YUV420P : Fmp4NativeVideoDecoder.OutputFormat.RGBA;
+      }
+   }
+
+   private static boolean isPackedYuvUploadMode() {
+      return OUTPUT_FORMAT.equals("yuv420_packed") || OUTPUT_FORMAT.equals("packed_yuv420");
+   }
+
+   private static String outputFormatLabel() {
+      if (!isYuvOutputRequested()) {
+         return "RGBA";
+      } else if (isNv12OutputRequested()) {
+         return VideoBillboardPreview.isCustomYuvShaderAvailable()
+            ? "NV12 planes(shader upload, UV=" + (isNv12UvRg8Enabled() ? "RG8" : "RGBA8") + ")"
+            : "NV12→RGBA(cpu/iris-fallback)";
+      } else if (!isPackedYuvUploadMode() && !VideoBillboardPreview.isCustomYuvShaderAvailable()) {
+         return "YUV420P→RGBA(cpu/iris-fallback)";
+      } else {
+         return isPackedYuvUploadMode() ? "YUV420P packed-upload" : "YUV420P planes(shader upload)";
+      }
+   }
+
+   private static long estimatedUploadBytes(int decodedFrameBytes, int width, int height) {
+      long pixels = (long)Math.max(1, width) * Math.max(1, height);
+      if (isNv12OutputRequested()) {
+         if (!VideoBillboardPreview.isCustomYuvShaderAvailable()) {
+            return pixels * 4L;
+         } else {
+            return isNv12UvRg8Enabled() ? pixels * 3L / 2L : pixels * 2L;
+         }
+      } else {
+         return decodedFrameBytes;
+      }
+   }
+
+   private static boolean isNv12UvRg8Enabled() {
+      return VideoPipelineProperties.nv12UvRg8Enabled();
+   }
+
+   private static int outputFpsFor(BiliApiClient.VideoStream stream) {
+      int sourceFps = parseFrameRate(stream.frameRate());
+      int cap = ADAPTIVE_FPS_CAP ? adaptiveFpsCapFor(stream) : MAX_OUTPUT_FPS;
+      return sourceFps <= 0 ? Math.max(1, Math.min(MAX_OUTPUT_FPS, cap)) : Math.max(1, Math.min(Math.min(sourceFps, MAX_OUTPUT_FPS), cap));
+   }
+
+   private static void sleepUntilNextFrame(long frameStartNs, long frameIntervalNs) {
+      if (frameIntervalNs > 0L) {
+         long remainingNs = frameIntervalNs - (System.nanoTime() - frameStartNs);
+         if (remainingNs > 0L) {
+            try {
+               TimeUnit.NANOSECONDS.sleep(remainingNs);
+            } catch (InterruptedException var7) {
+               Thread.currentThread().interrupt();
+            }
+         }
+      }
+   }
+
+   private static int adaptiveFpsCapFor(BiliApiClient.VideoStream stream) {
+      long pixels = (long)Math.max(1, stream.width()) * Math.max(1, stream.height());
+      if (pixels >= 28000000L) {
+         return Math.max(1, CAP_8K_FPS);
+      } else if (pixels >= 4800000L) {
+         return Math.max(1, CAP_4K_FPS);
+      } else {
+         return pixels >= 1800000L ? Math.max(1, CAP_1080P_FPS) : Math.max(1, MAX_OUTPUT_FPS);
+      }
+   }
+
+   private static boolean isUsableForRequestedMode(BiliRealVideoPlaybackBench.StageResult result) {
+      if (result.frames() <= 0) {
+         return false;
+      } else if (isMuscleDemoResult(result)) {
+         return result.actualLoopFps() >= Math.max(0.25, result.outputFps() * 0.5);
+      } else {
+         return isAtLeast1080p(result.stream())
+            ? result.actualLoopFps() >= Math.min((double)MIN_1080P_FPS, result.outputFps() * 0.75)
+            : isSmoothPlaybackResult(result);
+      }
+   }
+
+   private static boolean isSmoothPlaybackResult(BiliRealVideoPlaybackBench.StageResult result) {
+      return result.frames() > 0 && result.actualLoopFps() >= Math.min(result.outputFps() * 0.75, result.outputFps() - 1.0);
+   }
+
+   private static BiliRealVideoPlaybackBench.StageResult lastUsableNonDemoResult(
+      BiliRealVideoPlaybackBench.StageResult lastUsableResult, BiliRealVideoPlaybackBench.StageResult demoResult
+   ) {
+      if (lastUsableResult != null && !isMuscleDemoResult(lastUsableResult)) {
+         return lastUsableResult;
+      } else {
+         LOGGER.warn("  Bench 后预览跳过 4K/8K muscle demo，避免高分辨率上传拖慢游戏 FPS。如需强行预览，请设置 -Dncpb.video.real_bench.preview.prefer_demo=true");
+         return null;
+      }
+   }
+
+   private static boolean isMuscleDemoResult(BiliRealVideoPlaybackBench.StageResult result) {
+      BiliApiClient.VideoStream stream = result.stream();
+      long pixels = (long)Math.max(1, stream.width()) * Math.max(1, stream.height());
+      return pixels >= 4800000L;
+   }
+
+   private static boolean isAtLeast1080p(BiliApiClient.VideoStream stream) {
+      long pixels = (long)Math.max(1, stream.width()) * Math.max(1, stream.height());
+      return pixels >= 1800000L;
+   }
+
+   private static boolean shouldStopAfter(BiliRealVideoPlaybackBench.StageResult result) {
+      if (result.maxUploadMs() >= STOP_MAX_UPLOAD_MS) {
+         return true;
+      } else {
+         return isMuscleDemoResult(result) ? false : result.avgStageMs() >= STOP_AVG_STAGE_MS;
+      }
+   }
+
+   private static String playbackMode(BiliApiClient.VideoStream stream) {
+      long pixels = (long)Math.max(1, stream.width()) * Math.max(1, stream.height());
+      if (pixels >= 28000000L) {
+         return "8K muscle demo";
+      } else if (pixels >= 4800000L) {
+         return "4K+ muscle demo";
+      } else {
+         return isAtLeast1080p(stream) ? "1080p guaranteed low-fps playback" : "realtime playback";
+      }
+   }
+
+   private static String routeDescription(BiliApiClient.VideoStream stream) {
+      return "native(requestedHwaccel=" + (NATIVE_HWACCEL.isBlank() ? "auto" : NATIVE_HWACCEL) + ")";
+   }
+
+   private static String decoderOverrideFor(BiliApiClient.VideoStream stream) {
+      String configured = VideoFeatureProperties.ffmpegDecoder();
+      if (configured.isBlank()) {
+         return null;
+      } else {
+         String lower = configured.toLowerCase(Locale.ROOT);
+         if (stream.codecId() != 7 || !lower.contains("264") && !lower.contains("avc")) {
+            return stream.codecId() == 13 && lower.contains("av1") ? configured : null;
+         } else {
+            return configured;
+         }
+      }
+   }
+
+   private static int parseFrameRate(String raw) {
+      if (raw != null && !raw.isBlank()) {
+         String normalized = raw.trim();
+
+         try {
+            if (normalized.contains("/")) {
+               String[] parts = normalized.split("/", 2);
+               double numerator = Double.parseDouble(parts[0].trim());
+               double denominator = Double.parseDouble(parts[1].trim());
+               if (denominator > 0.0) {
+                  return Math.max(1, (int)Math.round(numerator / denominator));
+               }
+            }
+
+            return Math.max(1, (int)Math.round(Double.parseDouble(normalized)));
+         } catch (NumberFormatException var7) {
+            return 0;
+         }
+      } else {
+         return 0;
+      }
+   }
+
+   public record RunSnapshot(BiliRealVideoPlaybackBench.RunState state, String videoId, int decodedStages, int decodedFrames, String detail) {
+   }
+
+   public static enum RunState {
+      IDLE,
+      RUNNING,
+      SUCCEEDED,
+      FAILED;
+   }
+
+   private record StageResult(
+      int requestedQuality,
+      BiliApiClient.VideoStream stream,
+      int outputFps,
+      int frames,
+      int measuredFrames,
+      int warmupFrames,
+      long totalDecodeNs,
+      long totalQueueWaitNs,
+      long totalNativeGetNs,
+      long totalDecodeOtherNs,
+      long totalUploadNs,
+      long totalLoopNs,
+      long maxDecodeNs,
+      long maxQueueWaitNs,
+      long maxNativeGetNs,
+      long maxDecodeOtherNs,
+      long maxUploadNs,
+      long totalMeasuredFrameBytes,
+      long totalStageNs,
+      int directFrames,
+      int heapFrames
+   ) {
+      double avgDecodeMs() {
+         return this.measuredFrames <= 0 ? 0.0 : this.totalDecodeNs / 1000000.0 / this.measuredFrames;
+      }
+
+      double avgQueueWaitMs() {
+         return this.measuredFrames <= 0 ? 0.0 : this.totalQueueWaitNs / 1000000.0 / this.measuredFrames;
+      }
+
+      double avgNativeGetMs() {
+         return this.measuredFrames <= 0 ? 0.0 : this.totalNativeGetNs / 1000000.0 / this.measuredFrames;
+      }
+
+      double avgDecodeOtherMs() {
+         return this.measuredFrames <= 0 ? 0.0 : this.totalDecodeOtherNs / 1000000.0 / this.measuredFrames;
+      }
+
+      double avgUploadMs() {
+         return this.measuredFrames <= 0 ? 0.0 : this.totalUploadNs / 1000000.0 / this.measuredFrames;
+      }
+
+      double maxDecodeMs() {
+         return this.maxDecodeNs / 1000000.0;
+      }
+
+      double maxQueueWaitMs() {
+         return this.maxQueueWaitNs / 1000000.0;
+      }
+
+      double maxNativeGetMs() {
+         return this.maxNativeGetNs / 1000000.0;
+      }
+
+      double maxDecodeOtherMs() {
+         return this.maxDecodeOtherNs / 1000000.0;
+      }
+
+      double maxUploadMs() {
+         return this.maxUploadNs / 1000000.0;
+      }
+
+      double avgStageMs() {
+         return this.measuredFrames <= 0 ? 0.0 : this.totalLoopNs / 1000000.0 / this.measuredFrames;
+      }
+
+      double actualLoopFps() {
+         return this.measuredFrames * 1.0E9 / Math.max(1L, this.totalLoopNs);
+      }
+
+      double wallLoopFps() {
+         return this.frames * 1.0E9 / Math.max(1L, this.totalStageNs);
+      }
+
+      double avgFrameMiB() {
+         return this.measuredFrames > 0 && this.totalMeasuredFrameBytes > 0L
+            ? this.totalMeasuredFrameBytes / 1024.0 / 1024.0 / this.measuredFrames
+            : this.stream.width() * this.stream.height() * 4.0 / 1048576.0;
+      }
+
+      double uploadBandwidthMiBps() {
+         double mibPerFrame = this.avgFrameMiB();
+         return mibPerFrame * this.measuredFrames / Math.max(0.001, this.totalUploadNs / 1.0E9);
+      }
+   }
+}

@@ -1,0 +1,112 @@
+package com.zhongbai233.net_music_can_play_bili;
+
+import com.github.tartaricacid.netmusic.api.resolver.MusicPlayResolverManager;
+import com.mojang.logging.LogUtils;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliAudioResolver;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliClientAudioHandlers;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliConfig;
+import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableClientEvents;
+import com.zhongbai233.net_music_can_play_bili.client.tooltip.ClientMP4QueueTooltip;
+import com.zhongbai233.net_music_can_play_bili.client.tooltip.MP4QueueTooltip;
+import com.zhongbai233.net_music_can_play_bili.init.ModAttributes;
+import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
+import com.zhongbai233.net_music_can_play_bili.init.ModBlocks;
+import com.zhongbai233.net_music_can_play_bili.init.ModItems;
+import com.zhongbai233.net_music_can_play_bili.init.ModMenus;
+import com.zhongbai233.net_music_can_play_bili.media.stream.TempFileByteSpool;
+import com.zhongbai233.net_music_can_play_bili.network.ModernTurntableNetwork;
+import com.zhongbai233.net_music_can_play_bili.server.AreaAudioListenerSync;
+import com.zhongbai233.net_music_can_play_bili.server.NetMusicBiliServerCommands;
+import com.zhongbai233.net_music_can_play_bili.server.NetMusicPermissions;
+import com.zhongbai233.net_music_can_play_bili.server.PadMapScopeSync;
+import com.zhongbai233.net_music_can_play_bili.server.PlaybackAuditManager;
+import java.lang.reflect.Method;
+import net.minecraft.world.level.block.entity.BlockEntityType;
+import net.neoforged.api.distmarker.Dist;
+import net.neoforged.bus.api.IEventBus;
+import net.neoforged.fml.ModContainer;
+import net.neoforged.fml.common.Mod;
+import net.neoforged.fml.config.ModConfig.Type;
+import net.neoforged.fml.loading.FMLEnvironment;
+import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
+import net.neoforged.neoforge.capabilities.Capabilities.ItemHandler;
+import net.neoforged.neoforge.client.event.RegisterClientTooltipComponentFactoriesEvent;
+import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.server.ServerStartedEvent;
+import org.slf4j.Logger;
+
+@Mod("net_music_can_play_bili")
+public class NetMusicCanPlayBili {
+   public static final String MODID = "net_music_can_play_bili";
+   private static final Logger LOGGER = LogUtils.getLogger();
+
+   public NetMusicCanPlayBili(IEventBus modEventBus, ModContainer modContainer) {
+      ModAttributes.ATTRIBUTES.register(modEventBus);
+      ModBlocks.BLOCKS.register(modEventBus);
+      ModBlockEntities.BLOCK_ENTITY_TYPES.register(modEventBus);
+      ModItems.ITEMS.register(modEventBus);
+      ModItems.TABS.register(modEventBus);
+      ModMenus.MENU_TYPES.register(modEventBus);
+      modEventBus.addListener(ModernTurntableNetwork::register);
+      modEventBus.addListener(RegisterCapabilitiesEvent.class, this::registerCapabilities);
+      NeoForge.EVENT_BUS.addListener(NetMusicPermissions::onPermissionGather);
+      NeoForge.EVENT_BUS.addListener(NetMusicBiliServerCommands::onRegisterCommands);
+      NeoForge.EVENT_BUS.addListener(PadMapScopeSync::onPlayerLoggedIn);
+      NeoForge.EVENT_BUS.addListener(AreaAudioListenerSync::onPlayerLoggedIn);
+      NeoForge.EVENT_BUS.addListener(AreaAudioListenerSync::onPlayerLoggedOut);
+      NeoForge.EVENT_BUS.addListener(AreaAudioListenerSync::onServerTick);
+      NeoForge.EVENT_BUS.addListener(AreaAudioListenerSync::onServerStopping);
+      registerDevelopmentSelfTests();
+      NeoForge.EVENT_BUS.addListener(PlaybackAuditManager::onServerTick);
+      NeoForge.EVENT_BUS.addListener(PlaybackAuditManager::onPlayerLoggedIn);
+      modEventBus.addListener(Config::onLoad);
+      modContainer.registerConfig(Type.COMMON, Config.SPEC);
+      MusicPlayResolverManager.registerResolver(new BiliAudioResolver());
+      TempFileByteSpool.cleanupOrphanedSpoolFiles();
+      LOGGER.info("BiliAudioResolver registered with NetMusic");
+      if (FMLEnvironment.dist == Dist.CLIENT) {
+         ModernTurntableClientEvents.register(modEventBus);
+         BiliConfig.load();
+         BiliClientAudioHandlers.register();
+         modEventBus.addListener(RegisterClientTooltipComponentFactoriesEvent.class, event -> event.register(MP4QueueTooltip.class, ClientMP4QueueTooltip::new));
+      }
+   }
+
+   private void registerCapabilities(RegisterCapabilitiesEvent event) {
+      // 【反编译伪影修复】原来是参数化转换 (BlockEntityType<ModernTurntableBlockEntity>)，反编译器丢了类型参数，
+      // 于是 registerBlockEntity 的类型推断退化成 BlockEntity，lambda 里的 getItemHandler() 找不到符号。
+      // 字节码实证：合成 lambda 的参数类型就是 ModernTurntableBlockEntity（lambda$registerCapabilities$1）。
+      event.registerBlockEntity(ItemHandler.BLOCK, (BlockEntityType<ModernTurntableBlockEntity>)ModBlockEntities.MODERN_TURNTABLE.get(), (turntable, side) -> turntable.getItemHandler());
+   }
+
+   private static void registerDevelopmentSelfTests() {
+      if (PadDiagnosticsProperties.mapServerSelfTestEnabled()) {
+         registerDevelopmentSelfTest("com.zhongbai233.net_music_can_play_bili.server.PadMapSamplerServerSelfTest", "Pad map server self-test");
+      }
+
+      if (Boolean.getBoolean("ncpb.scene_editor.server_self_test")) {
+         registerDevelopmentSelfTest(
+            "com.zhongbai233.net_music_can_play_bili.server.SceneEditorDedicatedServerSelfTest", "Scene Editor dedicated-server self-test"
+         );
+      }
+   }
+
+   private static void registerDevelopmentSelfTest(String className, String description) {
+      try {
+         Class<?> selfTest = Class.forName(className);
+         Method handler = selfTest.getMethod("onServerStarted", ServerStartedEvent.class);
+         NeoForge.EVENT_BUS.addListener(ServerStartedEvent.class, event -> invokeDevelopmentSelfTest(handler, event));
+      } catch (ReflectiveOperationException var4) {
+         throw new IllegalStateException("Unable to register " + description, var4);
+      }
+   }
+
+   private static void invokeDevelopmentSelfTest(Method handler, ServerStartedEvent event) {
+      try {
+         handler.invoke(null, event);
+      } catch (ReflectiveOperationException var3) {
+         throw new IllegalStateException("Unable to run Pad map server self-test", var3);
+      }
+   }
+}

@@ -1,0 +1,17 @@
+package com.zhongbai233.net_music_can_play_bili.client;
+
+import com.zhongbai233.net_music_can_play_bili.network.PadPlaybackSessionIds;
+import java.util.UUID;
+
+final class PadClientMediaSessionIds {
+   private PadClientMediaSessionIds() {
+   }
+
+   static boolean isPadSession(String sessionId) {
+      return PadPlaybackSessionIds.isPadSession(sessionId);
+   }
+
+   static UUID pointId(String sessionId) {
+      return PadPlaybackSessionIds.pointId(sessionId);
+   }
+}

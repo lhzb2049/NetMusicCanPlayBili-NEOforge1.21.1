@@ -1,0 +1,329 @@
+package com.zhongbai233.net_music_can_play_bili.server;
+
+import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import com.mojang.logging.LogUtils;
+import com.zhongbai233.net_music_can_play_bili.network.WhitelistCsvExportPacket;
+import com.zhongbai233.net_music_can_play_bili.network.WhitelistReviewPacket;
+import java.io.IOException;
+import java.util.List;
+import net.minecraft.ChatFormatting;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
+import net.neoforged.neoforge.event.RegisterCommandsEvent;
+import org.slf4j.Logger;
+
+public final class NetMusicBiliServerCommands {
+   private static final Logger LOGGER = LogUtils.getLogger();
+   public static final String ROOT_COMMAND = "netmusicbiliserver";
+   public static final String SHORT_ROOT_COMMAND = "ncpbs";
+
+   private NetMusicBiliServerCommands() {
+   }
+
+   public static void onRegisterCommands(RegisterCommandsEvent event) {
+      CommandDispatcher<CommandSourceStack> dispatcher = event.getDispatcher();
+      dispatcher.register(serverRoot("netmusicbiliserver"));
+      dispatcher.register(serverRoot("ncpbs"));
+      LOGGER.info("Registered server commands /{} and /{}", "netmusicbiliserver", "ncpbs");
+   }
+
+   private static LiteralArgumentBuilder<CommandSourceStack> serverRoot(String name) {
+      return (LiteralArgumentBuilder<CommandSourceStack>)((LiteralArgumentBuilder)((LiteralArgumentBuilder)Commands.literal(name)
+               .then(
+                  ((LiteralArgumentBuilder)((LiteralArgumentBuilder)Commands.literal("sources").requires(NetMusicBiliServerCommands::canAuditSources))
+                        .then(
+                           Commands.literal("limit")
+                              .then(
+                                 Commands.argument("count", IntegerArgumentType.integer(1, 100))
+                                    .executes(ctx -> listSources((CommandSourceStack)ctx.getSource(), IntegerArgumentType.getInteger(ctx, "count")))
+                              )
+                        ))
+                     .executes(ctx -> listSources((CommandSourceStack)ctx.getSource()))
+               ))
+            .then(
+               ((LiteralArgumentBuilder)Commands.literal("pad").requires(NetMusicBiliServerCommands::canRefreshPad))
+                  .then(Commands.literal("refresh").executes(ctx -> refreshPadServerState((CommandSourceStack)ctx.getSource())))
+            ))
+         .then(
+            ((LiteralArgumentBuilder)((LiteralArgumentBuilder)((LiteralArgumentBuilder)((LiteralArgumentBuilder)((LiteralArgumentBuilder)((LiteralArgumentBuilder)Commands.literal(
+                                    "whitelist"
+                                 )
+                                 .requires(NetMusicBiliServerCommands::canManageWhitelist))
+                              .then(
+                                 Commands.literal("add")
+                                    .then(
+                                       Commands.argument("idOrLink", StringArgumentType.greedyString())
+                                          .executes(ctx -> addWhitelist((CommandSourceStack)ctx.getSource(), StringArgumentType.getString(ctx, "idOrLink")))
+                                    )
+                              ))
+                           .then(Commands.literal("list").executes(ctx -> listWhitelist((CommandSourceStack)ctx.getSource()))))
+                        .then(
+                           Commands.literal("remove")
+                              .then(
+                                 Commands.argument("idOrLink", StringArgumentType.string())
+                                    .then(
+                                       Commands.argument("note", StringArgumentType.greedyString())
+                                          .executes(
+                                             ctx -> removeWhitelist(
+                                                (CommandSourceStack)ctx.getSource(),
+                                                StringArgumentType.getString(ctx, "idOrLink"),
+                                                StringArgumentType.getString(ctx, "note")
+                                             )
+                                          )
+                                    )
+                              )
+                        ))
+                     .then(
+                        Commands.literal("comment")
+                           .then(
+                              Commands.argument("idOrLink", StringArgumentType.string())
+                                 .then(
+                                    Commands.argument("text", StringArgumentType.greedyString())
+                                       .executes(
+                                          ctx -> commentWhitelist(
+                                             (CommandSourceStack)ctx.getSource(),
+                                             StringArgumentType.getString(ctx, "idOrLink"),
+                                             StringArgumentType.getString(ctx, "text")
+                                          )
+                                       )
+                                 )
+                           )
+                     ))
+                  .then(Commands.literal("export").executes(ctx -> exportWhitelist((CommandSourceStack)ctx.getSource()))))
+               .then(Commands.literal("review").executes(ctx -> openWhitelistReview((CommandSourceStack)ctx.getSource())))
+         );
+   }
+
+   private static int refreshPadServerState(CommandSourceStack source) {
+      source.sendSuccess(() -> Component.literal("Pad服务端临时状态已刷新。客户端地图缓存请使用 /ncpbc pad cache refresh。").withStyle(ChatFormatting.GREEN), true);
+      return 1;
+   }
+
+   private static boolean canAuditSources(CommandSourceStack source) {
+      return NetMusicPermissions.has(source, NetMusicPermissions.AUDIT_SOURCES);
+   }
+
+   private static boolean canRefreshPad(CommandSourceStack source) {
+      return NetMusicPermissions.has(source, NetMusicPermissions.PAD_REFRESH);
+   }
+
+   public static boolean canManageWhitelist(CommandSourceStack source) {
+      return NetMusicPermissions.has(source, NetMusicPermissions.WHITELIST_MANAGE);
+   }
+
+   private static int listSources(CommandSourceStack source) {
+      return listSources(source, 20);
+   }
+
+   private static int listSources(CommandSourceStack source, int limit) {
+      if (!canAuditSources(source)) {
+         source.sendFailure(Component.literal("需要 OP2 权限才能查询正在播放的音源。").withStyle(ChatFormatting.RED));
+         return 0;
+      } else {
+         List<PlaybackAuditManager.ActiveSource> sources = PlaybackAuditManager.snapshot(source.getServer());
+         if (sources.isEmpty()) {
+            source.sendSuccess(() -> Component.literal("♫ 当前没有正在播放的现代化唱片机/MP4 音源。").withStyle(ChatFormatting.GRAY), false);
+            return 0;
+         } else {
+            int shown = Math.min(Math.max(1, limit), sources.size());
+            source.sendSuccess(
+               () -> Component.literal("♫ 正在播放的音源：")
+                  .withStyle(new ChatFormatting[]{ChatFormatting.GOLD, ChatFormatting.BOLD})
+                  .append(Component.literal(String.valueOf(sources.size())).withStyle(ChatFormatting.YELLOW))
+                  .append(Component.literal(" 个  显示 ").withStyle(ChatFormatting.DARK_GRAY))
+                  .append(Component.literal(String.valueOf(shown)).withStyle(ChatFormatting.YELLOW))
+                  .append(Component.literal(" 个  ").withStyle(ChatFormatting.DARK_GRAY))
+                  .append(Component.literal("点击坐标可传送").withStyle(ChatFormatting.GRAY)),
+               false
+            );
+
+            for (int i = 0; i < shown; i++) {
+               PlaybackAuditManager.ActiveSource active = sources.get(i);
+               source.sendSuccess(() -> active.describe(source.getServer()), false);
+            }
+
+            if (shown < sources.size()) {
+               source.sendSuccess(
+                  () -> Component.literal("… 还有 " + (sources.size() - shown) + " 个未显示；用 /netmusicbiliserver sources limit <数量> 调整。")
+                     .withStyle(ChatFormatting.DARK_GRAY),
+                  false
+               );
+            }
+
+            return sources.size();
+         }
+      }
+   }
+
+   private static int addWhitelist(CommandSourceStack source, String raw) {
+      try {
+         BiliWhitelistManager.AddResult result = BiliWhitelistManager.add(source.getServer(), raw, source.getPlayer());
+
+         return switch (result.status()) {
+            case ADDED -> {
+               BiliWhitelistManager.Entry entry = result.entry();
+               source.sendSuccess(
+                  () -> Component.literal("已添加链接白名单：")
+                     .withStyle(ChatFormatting.GREEN)
+                     .append(Component.literal(entry.id).withStyle(ChatFormatting.YELLOW))
+                     .append(Component.literal("  添加者：" + entry.addedByName).withStyle(ChatFormatting.GRAY)),
+                  true
+               );
+               yield 1;
+            }
+            case DUPLICATE -> {
+               BiliWhitelistManager.Entry entry = result.entry();
+               source.sendFailure(
+                  Component.literal("该条目已在白名单：" + entry.id + "（添加者：" + entry.addedByName + "，时间：" + entry.addedAt + "）").withStyle(ChatFormatting.YELLOW)
+               );
+               yield 0;
+            }
+            case INVALID -> {
+               source.sendFailure(Component.literal("请输入 BV号、av号，或 NetMusic 电脑使用的第三方链接/URL。").withStyle(ChatFormatting.RED));
+               yield 0;
+            }
+         };
+      } catch (IOException var4) {
+         LOGGER.warn("保存链接白名单失败", var4);
+         source.sendFailure(Component.literal("保存白名单失败：" + var4.getMessage()).withStyle(ChatFormatting.RED));
+         return 0;
+      }
+   }
+
+   private static int listWhitelist(CommandSourceStack source) {
+      List<BiliWhitelistManager.Entry> entries = BiliWhitelistManager.entries(source.getServer());
+      if (entries.isEmpty()) {
+         source.sendSuccess(() -> Component.literal("链接白名单为空。启用配置后，未加入白名单的 BV/第三方链接不能创建唱片或音源头。").withStyle(ChatFormatting.GRAY), false);
+         return 0;
+      } else {
+         source.sendSuccess(
+            () -> Component.literal("链接白名单：")
+               .withStyle(new ChatFormatting[]{ChatFormatting.GOLD, ChatFormatting.BOLD})
+               .append(Component.literal(String.valueOf(entries.size())).withStyle(ChatFormatting.YELLOW))
+               .append(Component.literal(" 条").withStyle(ChatFormatting.GRAY)),
+            false
+         );
+
+         for (int i = 0; i < entries.size(); i++) {
+            int index = i + 1;
+            BiliWhitelistManager.Entry entry = entries.get(i);
+            source.sendSuccess(
+               () -> Component.literal(index + ". ")
+                  .withStyle(ChatFormatting.DARK_GRAY)
+                  .append(Component.literal("[" + entry.type + "] ").withStyle(ChatFormatting.AQUA))
+                  .append(Component.literal(entry.id).withStyle(ChatFormatting.YELLOW))
+                  .append(Component.literal("  by " + entry.addedByName).withStyle(ChatFormatting.GRAY))
+                  .append(Component.literal("  " + entry.addedAt).withStyle(ChatFormatting.DARK_GRAY)),
+               false
+            );
+         }
+
+         return entries.size();
+      }
+   }
+
+   private static int removeWhitelist(CommandSourceStack source, String raw, String note) {
+      try {
+         BiliWhitelistManager.RemoveResult result = BiliWhitelistManager.remove(source.getServer(), raw, source.getPlayer(), note);
+
+         return switch (result.status()) {
+            case REMOVED -> {
+               source.sendSuccess(
+                  () -> Component.literal("已删除链接白名单：")
+                     .withStyle(ChatFormatting.GREEN)
+                     .append(Component.literal(result.entry().id).withStyle(ChatFormatting.YELLOW)),
+                  true
+               );
+               yield 1;
+            }
+            case MISSING -> {
+               source.sendFailure(Component.literal("白名单中没有：" + result.requestedId()).withStyle(ChatFormatting.YELLOW));
+               yield 0;
+            }
+            case INVALID -> {
+               source.sendFailure(Component.literal("请输入 BV号、av号，或 NetMusic 电脑使用的第三方链接/URL。").withStyle(ChatFormatting.RED));
+               yield 0;
+            }
+            case NOTE_REQUIRED -> {
+               source.sendFailure(Component.literal("移除白名单必须填写备注，例如：remove \"bili:BV...\" 误收录").withStyle(ChatFormatting.RED));
+               yield 0;
+            }
+            case STALE -> {
+               source.sendFailure(Component.literal("白名单条目已发生变化，请重试。").withStyle(ChatFormatting.YELLOW));
+               yield 0;
+            }
+         };
+      } catch (IOException var4) {
+         LOGGER.warn("保存链接白名单失败", var4);
+         source.sendFailure(Component.literal("保存白名单失败：" + var4.getMessage()).withStyle(ChatFormatting.RED));
+         return 0;
+      }
+   }
+
+   private static int commentWhitelist(CommandSourceStack source, String raw, String text) {
+      try {
+         BiliWhitelistManager.CommentResult result = BiliWhitelistManager.addComment(source.getServer(), raw, source.getPlayer(), text);
+
+         return switch (result.status()) {
+            case ADDED -> {
+               source.sendSuccess(() -> Component.literal("已追加白名单审核评论：" + result.requestedId()).withStyle(ChatFormatting.GREEN), true);
+               yield 1;
+            }
+            case MISSING -> {
+               source.sendFailure(Component.literal("白名单中没有：" + result.requestedId()).withStyle(ChatFormatting.YELLOW));
+               yield 0;
+            }
+            case INVALID -> {
+               source.sendFailure(Component.literal("请输入有效的 BV号、av号或白名单链接。").withStyle(ChatFormatting.RED));
+               yield 0;
+            }
+            case COMMENT_REQUIRED -> {
+               source.sendFailure(Component.literal("审核评论不能为空。").withStyle(ChatFormatting.RED));
+               yield 0;
+            }
+            case STALE -> {
+               source.sendFailure(Component.literal("白名单条目已发生变化，请重试。").withStyle(ChatFormatting.YELLOW));
+               yield 0;
+            }
+         };
+      } catch (IOException var4) {
+         LOGGER.warn("保存链接白名单评论失败", var4);
+         source.sendFailure(Component.literal("保存白名单失败：" + var4.getMessage()).withStyle(ChatFormatting.RED));
+         return 0;
+      }
+   }
+
+   private static int exportWhitelist(CommandSourceStack source) {
+      ServerPlayer player = source.getPlayer();
+      if (player == null) {
+         source.sendFailure(Component.literal("CSV 导出需要由玩家执行，才能下载到本地客户端。").withStyle(ChatFormatting.RED));
+         return 0;
+      } else {
+         try {
+            int chunks = WhitelistCsvExportPacket.exportTo(player);
+            source.sendSuccess(() -> Component.literal("已开始向客户端传输白名单 CSV（" + chunks + " 个分块）。").withStyle(ChatFormatting.GREEN), false);
+            return 1;
+         } catch (IllegalArgumentException var3) {
+            source.sendFailure(Component.literal("白名单 CSV 导出失败：" + var3.getMessage()).withStyle(ChatFormatting.RED));
+            return 0;
+         }
+      }
+   }
+
+   private static int openWhitelistReview(CommandSourceStack source) {
+      ServerPlayer player = source.getPlayer();
+      if (player == null) {
+         source.sendFailure(Component.literal("白名单审核 GUI 需要由玩家执行。").withStyle(ChatFormatting.RED));
+         return 0;
+      } else {
+         WhitelistReviewPacket.sendTo(player);
+         source.sendSuccess(() -> Component.literal("已打开白名单审核界面。").withStyle(ChatFormatting.GREEN), false);
+         return 1;
+      }
+   }
+}

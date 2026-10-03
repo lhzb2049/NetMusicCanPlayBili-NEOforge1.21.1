@@ -1,0 +1,61 @@
+package com.zhongbai233.net_music_can_play_bili.network;
+
+import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
+import net.neoforged.neoforge.network.registration.PayloadRegistrar;
+
+public final class ModernTurntableNetwork {
+   private ModernTurntableNetwork() {
+   }
+
+   public static void register(RegisterPayloadHandlersEvent event) {
+      PayloadRegistrar registrar = event.registrar("6");
+      registrar.playToServer(ModernTurntableControlPacket.TYPE, ModernTurntableControlPacket.STREAM_CODEC, ModernTurntableControlPacket::handle);
+      registrar.playToClient(ModernTurntableStopPacket.TYPE, ModernTurntableStopPacket.STREAM_CODEC, ModernTurntableStopPacket::handle);
+      registrar.playToClient(AudioEndpointSnapshotPacket.TYPE, AudioEndpointSnapshotPacket.STREAM_CODEC, AudioEndpointSnapshotPacket::handle);
+      registrar.playToClient(AreaAudioListenerPacket.TYPE, AreaAudioListenerPacket.STREAM_CODEC, AreaAudioListenerPacket::handle);
+      registrar.playToServer(LiveStreamerControlPacket.TYPE, LiveStreamerControlPacket.STREAM_CODEC, LiveStreamerControlPacket::handle);
+      registrar.playToServer(LyricProjectorConfigPacket.TYPE, LyricProjectorConfigPacket.STREAM_CODEC, LyricProjectorConfigPacket::handle);
+      registrar.playToServer(SpeakerConfigPacket.TYPE, SpeakerConfigPacket.STREAM_CODEC, SpeakerConfigPacket::handle);
+      registrar.playToServer(VideoProjectorConfigPacket.TYPE, VideoProjectorConfigPacket.STREAM_CODEC, VideoProjectorConfigPacket::handle);
+      registrar.playToServer(HolographicGlassesConfigPacket.TYPE, HolographicGlassesConfigPacket.STREAM_CODEC, HolographicGlassesConfigPacket::handle);
+      registrar.playToServer(ControlConsoleConfigPacket.TYPE, ControlConsoleConfigPacket.STREAM_CODEC, ControlConsoleConfigPacket::handle);
+      registrar.playToServer(ControlConsoleAccessPacket.TYPE, ControlConsoleAccessPacket.STREAM_CODEC, ControlConsoleAccessPacket::handle);
+      registrar.playToServer(ControlConsoleEditLeasePacket.TYPE, ControlConsoleEditLeasePacket.STREAM_CODEC, ControlConsoleEditLeasePacket::handle);
+      registrar.playToClient(
+         ControlConsoleEditLeaseResultPacket.TYPE, ControlConsoleEditLeaseResultPacket.STREAM_CODEC, ControlConsoleEditLeaseResultPacket::handle
+      );
+      registrar.playToServer(ControlConsoleConsumerLeasePacket.TYPE, ControlConsoleConsumerLeasePacket.STREAM_CODEC, ControlConsoleConsumerLeasePacket::handle);
+      registrar.playToClient(
+         ControlConsoleConsumerLeaseResultPacket.TYPE, ControlConsoleConsumerLeaseResultPacket.STREAM_CODEC, ControlConsoleConsumerLeaseResultPacket::handle
+      );
+      registrar.playToClient(ControlConsoleConfigResultPacket.TYPE, ControlConsoleConfigResultPacket.STREAM_CODEC, ControlConsoleConfigResultPacket::handle);
+      registrar.playToServer(ClearEquippedBindingPacket.TYPE, ClearEquippedBindingPacket.STREAM_CODEC, ClearEquippedBindingPacket::handle);
+      registrar.playToServer(MediaToolConfirmBindingPacket.TYPE, MediaToolConfirmBindingPacket.STREAM_CODEC, MediaToolConfirmBindingPacket::handle);
+      registrar.playToServer(MediaToolClearBindingPacket.TYPE, MediaToolClearBindingPacket.STREAM_CODEC, MediaToolClearBindingPacket::handle);
+      registrar.playToServer(MediaToolReportPacket.TYPE, MediaToolReportPacket.STREAM_CODEC, MediaToolReportPacket::handle);
+      registrar.playToServer(WhitelistReviewActionPacket.TYPE, WhitelistReviewActionPacket.STREAM_CODEC, WhitelistReviewActionPacket::handle);
+      registrar.playToServer(MP4StatePacket.TYPE, MP4StatePacket.STREAM_CODEC, MP4StatePacket::handle);
+      registrar.playToServer(MP4PlaybackControlPacket.TYPE, MP4PlaybackControlPacket.STREAM_CODEC, MP4PlaybackControlPacket::handle);
+      registrar.playToServer(MP4PlaybackRetryPacket.TYPE, MP4PlaybackRetryPacket.STREAM_CODEC, MP4PlaybackRetryPacket::handle);
+      registrar.playToServer(MP4EnsureDeviceIdPacket.TYPE, MP4EnsureDeviceIdPacket.STREAM_CODEC, MP4EnsureDeviceIdPacket::handle);
+      registrar.playToServer(MP4EnsureInventoryDeviceIdPacket.TYPE, MP4EnsureInventoryDeviceIdPacket.STREAM_CODEC, MP4EnsureInventoryDeviceIdPacket::handle);
+      registrar.playToServer(PadStatePacket.TYPE, PadStatePacket.STREAM_CODEC, PadStatePacket::handle);
+      registrar.playToServer(PadPublishPacket.TYPE, PadPublishPacket.STREAM_CODEC, PadPublishPacket::handle);
+      registrar.playToServer(PadPlaybackControlPacket.TYPE, PadPlaybackControlPacket.STREAM_CODEC, PadPlaybackControlPacket::handle);
+      registrar.playToServer(PadPlaybackRetryPacket.TYPE, PadPlaybackRetryPacket.STREAM_CODEC, PadPlaybackRetryPacket::handle);
+      registrar.playToClient(MP4DeviceIdPacket.TYPE, MP4DeviceIdPacket.STREAM_CODEC, MP4DeviceIdPacket::handle);
+      registrar.playToClient(MP4InventoryDeviceIdPacket.TYPE, MP4InventoryDeviceIdPacket.STREAM_CODEC, MP4InventoryDeviceIdPacket::handle);
+      registrar.playToClient(MP4ContainerDeviceIdPacket.TYPE, MP4ContainerDeviceIdPacket.STREAM_CODEC, MP4ContainerDeviceIdPacket::handle);
+      registrar.playToClient(MP4DeviceStateMirrorPacket.TYPE, MP4DeviceStateMirrorPacket.STREAM_CODEC, MP4DeviceStateMirrorPacket::handle);
+      registrar.playToClient(MP4PlaybackSyncPacket.TYPE, MP4PlaybackSyncPacket.STREAM_CODEC, MP4PlaybackSyncPacket::handle);
+      registrar.playToClient(MP4PlaybackTimelinePacket.TYPE, MP4PlaybackTimelinePacket.STREAM_CODEC, MP4PlaybackTimelinePacket::handle);
+      registrar.playToClient(PadStateMirrorPacket.TYPE, PadStateMirrorPacket.STREAM_CODEC, PadStateMirrorPacket::handle);
+      registrar.playToClient(WhitelistCsvExportPacket.TYPE, WhitelistCsvExportPacket.STREAM_CODEC, WhitelistCsvExportPacket::handle);
+      registrar.playToClient(WhitelistReviewPacket.TYPE, WhitelistReviewPacket.STREAM_CODEC, WhitelistReviewPacket::handle);
+      registrar.playToClient(
+         WhitelistReviewMutationResultPacket.TYPE, WhitelistReviewMutationResultPacket.STREAM_CODEC, WhitelistReviewMutationResultPacket::handle
+      );
+      registrar.playToClient(WhitelistPreviewPacket.TYPE, WhitelistPreviewPacket.STREAM_CODEC, WhitelistPreviewPacket::handle);
+      registrar.playToClient(PadMapWorldScopePacket.TYPE, PadMapWorldScopePacket.STREAM_CODEC, PadMapWorldScopePacket::handle);
+   }
+}
