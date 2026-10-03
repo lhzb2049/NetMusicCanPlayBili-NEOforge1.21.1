@@ -1,0 +1,19 @@
+# 本工程的验收判据包含「资源清单与字节」比对（见 docs/HANDOVER-NCPB-1.21.1-src.md），
+# 因此默认**不做任何换行转换**：字节入库、字节出库，任何平台克隆出来都是同一份字节。
+#
+# 特别注意：原 jar 中有 59 个资源文件本身就是 CRLF（lang/models/blockstates/recipes/
+# tags/loot_table 的 json、native 下的许可文本、native/SHA256SUMS 等），
+# 另有 META-INF/accesstransformer.cfg 是 mixed 换行。
+# 若用 `* text=auto` 把它们规范化成 LF，重新打包出的 jar 就会与原 jar 字节不一致。
+* -text
+
+# 例外：Gradle 的 POSIX 启动脚本必须保持 LF
+gradlew text eol=lf
+
+# 原生库与图片：声明为二进制，避免 diff/merge 尝试做文本合并
+*.dll binary
+*.dylib binary
+*.so binary
+*.png binary
+*.jar binary
+*.ico binary
