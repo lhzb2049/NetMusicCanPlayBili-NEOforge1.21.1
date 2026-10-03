@@ -144,6 +144,9 @@ cmd = [JAVAC,
        '-J-Duser.language=en', '-J-Duser.country=US',   # 诊断固定英文，避免本地化文本解析
        '-J-Dstdout.encoding=UTF-8', '-J-Dstderr.encoding=UTF-8',
        '-nowarn', '-proc:none', '-encoding', 'UTF-8',
+       # -g：带上完整调试信息（含 LocalVariableTable），与 Gradle/MDG 的产物对齐。
+       # 不带 -g 时 javap 渲染匿名类构造器会省略合成参数，签名比对会被误导。
+       '-g',
        '-Xmaxerrs', str(args.maxerrs),
        '-cp', ';'.join(cp), '-d', CLASSES, '@' + argfile]
 t0 = time.time()
