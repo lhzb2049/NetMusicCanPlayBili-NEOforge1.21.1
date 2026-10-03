@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """验收④ 故障注入：证明 verify_src.py 的每一项都会说「不」。
 
-五组注入，每组都必须让 verify_src.py **非零退出**，且失败的检查项与注入意图对得上：
+六组注入，每组都必须让 verify_src.py **非零退出**，且失败的检查项与注入意图对得上：
 
   A  把某个类文件的 access_flags 里的 ACC_PUBLIC 清掉（public -> 包私有）
         -> 期望 member_signatures 失败
@@ -14,6 +14,10 @@
   E  把某个类 BootstrapMethods 引用的引导方法句柄（MethodHandle）重定向到另一个
      Methodref —— 不改变任何字节长度、不动成员签名
         -> 期望 bootstrap_methods 失败
+  F  把某个合成 lambda 的返回类型 V 改成 I（同长度原地补丁）
+        -> 期望 member_signatures 失败。合成成员的「参数顺序/擦除类型」按规则不计入判定，
+           但存在性/名称/标志/返回类型仍必须一致 —— 这一组就是证明过滤器只滤噪音、
+           不放过真正的结构改变（所以这里刻意不用"改捕获顺序"：那正是被过滤的那一类）
 
 每组注入前后都做哈希核对：
   * 注入后、调用 verify 之后哈希不变  -> 证明 verify_src.py 是只读的
@@ -24,7 +28,7 @@
 
 用法：
     python tools/run_faults.py [--jar <基线jar>] [--classes <classes目录>] [--built-jar <产物jar>]
-退出码：0 = 五组都按预期失败；非 0 = 有组别不符合预期
+退出码：0 = 六组都按预期失败；非 0 = 有组别不符合预期
 """
 import argparse
 import hashlib
@@ -46,6 +50,7 @@ FAULTS_DIR = os.path.join(PROJ, 'out-srccompile', 'verify_src', 'faults')
 BACKUP_DIR = os.path.join(FAULTS_DIR, 'backup')
 
 ACC_PUBLIC = 0x0001
+ACC_SYNTHETIC = 0x1000
 CP_SIZES = {3: 4, 4: 4, 5: 8, 6: 8, 7: 2, 8: 2, 9: 4, 10: 4, 11: 4, 12: 4,
             15: 3, 16: 2, 17: 4, 18: 4, 19: 2, 20: 2}
 
@@ -212,6 +217,53 @@ def inject_descriptor(path, old='()V', new='()I'):
     raise SystemExit('靶子里找不到 Utf8 `%s`' % old)
 
 
+def inject_lambda_return_type(path):
+    """把一个合成 lambda 方法的返回类型 V 改成 I —— 同长度，可原地补丁。
+
+    合成成员的参数顺序/擦除类型按规则不计入判定，但返回类型是保留项，所以这一刀必须被抓到。
+    """
+    import verify_src as V
+    with open(path, 'rb') as fh:
+        data = bytearray(fh.read())
+    cls = V.parse_class(bytes(data))
+    cp, _cp_end = parse_cp(bytes(data))   # 用本模块的解析器：它的条目带 start 偏移
+    for m in cls['members']:
+        if not (m['kind'] == 'm' and m['flags'] & ACC_SYNTHETIC and m['desc'].endswith('V')):
+            continue
+        if len([x for x in cls['members'] if x['desc'] == m['desc']]) != 1:
+            continue          # 描述符被别的成员共用，避免连带改动
+        hits = [e for e in cp if e and e['tag'] == 1 and e.get('s') == m['desc']]
+        if len(hits) != 1:
+            continue
+        e = hits[0]
+        off = e['start'] + 3 + len(m['desc']) - 1     # tag(1)+长度(2) 之后是字符串数据
+        data[off] = ord('I')
+        with open(path, 'wb') as fh:
+            fh.write(data)
+        return '合成 lambda %s 返回类型 V -> I（描述符 %s）' % (m['name'], m['desc'])
+    raise SystemExit('找不到合适的合成 lambda 靶子')
+
+
+def find_lambda_target(classes_dir):
+    """找第一个含"描述符未被共用、以 V 结尾"的合成方法的类。"""
+    import verify_src as V
+    for root, _dirs, files in os.walk(classes_dir):
+        for f in sorted(files):
+            if not f.endswith('.class'):
+                continue
+            path = os.path.join(root, f)
+            try:
+                with open(path, 'rb') as fh:
+                    cls = V.parse_class(fh.read())
+            except Exception:
+                continue
+            for m in cls['members']:
+                if (m['kind'] == 'm' and m['flags'] & ACC_SYNTHETIC and m['desc'].endswith('V')
+                        and len([x for x in cls['members'] if x['desc'] == m['desc']]) == 1):
+                    return path
+    return None
+
+
 def inject_bootstrap_handle(path):
     """把 BootstrapMethods 用到的某个 MethodHandle 重定向到另一个 Methodref（同长度原地补丁）。"""
     with open(path, 'rb') as fh:
@@ -301,6 +353,7 @@ def main():
 
     target_class = find_class_for_injection(classes)
     boot_class, _h = find_bootstrap_target(classes)
+    lambda_class = find_lambda_target(classes)
     os.makedirs(FAULTS_DIR, exist_ok=True)
 
     def simple(p):
@@ -313,6 +366,7 @@ def main():
     print('  产物 jar : %s' % (built_jar or '<未找到>'))
     print('  注入靶子 : %s' % os.path.relpath(target_class, classes))
     print('  ③d 靶子  : %s' % (os.path.relpath(boot_class, classes) if boot_class else '<未找到>'))
+    print('  合成靶子 : %s' % (os.path.relpath(lambda_class, classes) if lambda_class else '<未找到>'))
     print('=' * 78)
 
     groups = [
@@ -324,6 +378,8 @@ def main():
         ('D', 'top_level_classes', target_class, None, simple(target_class), '删掉一个顶层类'),
         ('E', 'bootstrap_methods', boot_class, inject_bootstrap_handle, simple(boot_class),
          '重定向 invokedynamic 的引导方法句柄'),
+        ('F', 'member_signatures', lambda_class, inject_lambda_return_type, simple(lambda_class),
+         '改合成 lambda 的返回类型 V -> I'),
     ]
 
     results = []

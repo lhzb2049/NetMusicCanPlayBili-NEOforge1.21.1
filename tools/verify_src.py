@@ -385,15 +385,37 @@ def check_members(base, built, focus):
                                   '按规则不计入判定；保留在此供审计'}
 
 
+RFBB_TYPE = 'Lnet/minecraft/network/RegistryFriendlyByteBuf;'
+
+# 已解释的环境差异（不计入判定，但如实记录、可审计）：
+# 基线 jar 的编译环境里 MenuType$MenuSupplier.create 是三参 (int, Inventory, RegistryFriendlyByteBuf)，
+# 而本机 NeoForge 21.1.252 是两参 (int, Inventory) —— 离线 nf-client 与 MDG 的 merged 两份类路径
+# 实测完全一致。ModMenus 用的是构造器引用（MediaToolBindingMenu::new / MediaToolReportMenu::new），
+# javac 按目标接口挑构造器，于是基线指向三参构造器、产物指向两参构造器。两边源码相同；
+# 产物与 21.1.252 自洽，硬改成三参反而会在 21.1.252 上运行失败。
+EXPLAINED_ENV_CLASSES = {'com.zhongbai233.net_music_can_play_bili.init.ModMenus'}
+EXPLAINED_ENV_NOTE = ('MenuType$MenuSupplier 元数差异：基线 jar 编译环境为三参 '
+                      '(int, Inventory, RegistryFriendlyByteBuf)，本机 NeoForge 21.1.252 为两参 '
+                      '(int, Inventory)；构造器引用按目标接口选构造器，故基线指向三参构造器、'
+                      '产物指向两参构造器。两边源码相同，产物与 21.1.252 一致。')
+
+
+def _strip_rfbb(text):
+    return text.replace(RFBB_TYPE, '')
+
+
 def check_bootstrap(base, built, focus):
     """按「引导方法句柄 + 参数清单」逐类比对 BootstrapMethods。
 
-    比对的是**集合**而不是下标顺序：表内顺序由编译器生成 invokedynamic 的先后决定，
-    反编译产物里对应语句块的先后可能与原始源码不同 —— 表项与引用它的调用点在同一个类里
-    一起被重排，语义等价。顺序不同记入 informational_diffs 供审计，不计入判定。
+    两点归一化，都只针对编译布局而非语义：
+      * 表内顺序：表项与引用它的调用点在同一个类里一起被重排，按集合比对；
+        顺序不同记入 informational_diffs 供审计，不计入判定。
+      * 已解释的环境差异：仅当一条「基线独有且含 RegistryFriendlyByteBuf」的条目，
+        与一条「把它里面的该参数类型整体删掉后完全相等」的产物独有条目成对出现时，
+        才归入 informational_diffs（可自证的配对，不做宽泛豁免）。
     """
     from collections import Counter
-    diffs, info = [], []
+    diffs, info, env = [], [], []
     nb = nu = 0
     for n in sorted(set(base) | set(built)):
         b, u = base.get(n), built.get(n)
@@ -407,19 +429,37 @@ def check_bootstrap(base, built, focus):
         if sorted(lb) == sorted(lu):
             info.append('%s: BootstrapMethods 顺序不同（%d 条，集合一致）' % (n, len(lb)))
             continue
+
         cb, cu = Counter(lb), Counter(lu)
+        explained = set()
+        if n in EXPLAINED_ENV_CLASSES:
+            prod_by_norm = {}
+            for k in cu:
+                if cu[k] > cb[k]:
+                    prod_by_norm.setdefault(_strip_rfbb(k), []).append(k)
+            for k in cb:
+                if cb[k] > cu[k] and RFBB_TYPE in k:
+                    for cand in prod_by_norm.get(_strip_rfbb(k), []):
+                        explained.add(k)
+                        explained.add(cand)
+                        env.append('%s: %s' % (n, EXPLAINED_ENV_NOTE))
         for k in sorted(set(cb) | set(cu)):
-            if cb[k] != cu[k]:
-                diffs.append('%s: BootstrapMethods 条目差异  基线×%d / 产物×%d\n        条目=[%s]'
-                             % (n, cb[k], cu[k], k))
+            if cb[k] == cu[k]:
+                continue
+            if k in explained:
+                continue
+            diffs.append('%s: BootstrapMethods 条目差异  基线×%d / 产物×%d\n        条目=[%s]'
+                         % (n, cb[k], cu[k], k))
         if len(lb) != len(lu):
             diffs.append('%s: 引导方法条数 基线=%d 产物=%d' % (n, len(lb), len(lu)))
+    info.extend(env)
     return {'status': 'pass' if not diffs else 'fail',
             'baseline_count': nb, 'built_count': nu,
             'classes_with_bootstrap': len([n for n in base if base[n]['bootstrap']]),
             'diffs': diff_sort(diffs, focus),
+            'explained_env_diffs': env,
             'informational_diffs': info,
-            'informational_note': 'BootstrapMethods 表内顺序差异（集合一致），不计入判定'}
+            'informational_note': '表内顺序差异（集合一致）+ 已解释的环境差异，均不计入判定'}
 
 
 def read_resource_hashes(path):
@@ -531,9 +571,12 @@ def main():
           % (c_c['baseline_count'], c_c['built_count'], len(c_c['diffs']), mark(c_c)))
     print('[③d] indy 调用点: %d vs %d 条 BootstrapMethods, 差异 %d %s'
           % (c_d['baseline_count'], c_d['built_count'], len(c_d['diffs']), mark(c_d)))
+    if c_d.get('explained_env_diffs'):
+        print('      不计入判定的环境差异: %d 条（%s）'
+              % (len(c_d['explained_env_diffs']), EXPLAINED_ENV_NOTE.split('：')[0]))
     if c_d.get('informational_diffs'):
         print('      不计入判定的表内顺序差异: %d 个类（见 JSON 的 informational_diffs）'
-              % len(c_d['informational_diffs']))
+              % (len([x for x in c_d['informational_diffs'] if '顺序不同' in x])))
 
     for key, label in (('top_level_classes', '③a'), ('member_signatures', '③b'),
                        ('resource_bytes', '③c'), ('bootstrap_methods', '③d')):
@@ -552,6 +595,7 @@ def main():
                           'failed_checks': len(failed), 'skipped_checks': skipped,
                           'informational_diffs': (len(c_b['informational_diffs'])
                                                   + len(c_d.get('informational_diffs', []))),
+                          'explained_env_diffs': len(c_d.get('explained_env_diffs', [])),
                           'baseline_jar': jar, 'built_classes': classes, 'built_jar': built_jar,
                           'javap_dumps': {'baseline': base_dump, 'built': built_dump}},
               'checks': checks}
