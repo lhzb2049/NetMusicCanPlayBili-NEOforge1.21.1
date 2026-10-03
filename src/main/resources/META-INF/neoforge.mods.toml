@@ -1,0 +1,88 @@
+# This is an example mods.toml file. It contains the data relating to the loading mods.
+# There are several mandatory fields (#mandatory), and many more that are optional (#optional).
+# The overall format is standard TOML format, v0.5.0.
+# Note that there are a couple of TOML lists in this file.
+# Find more information on toml format here:  https://github.com/toml-lang/toml
+# The name of the mod loader type to load - for regular FML @Mod mods it should be javafml
+modLoader = "javafml" #mandatory
+# A version range to match for said mod loader - for regular FML @Mod it will be the the FML version. This is currently 47.
+loaderVersion = "[4,)" #mandatory
+# The license for you mod. This is mandatory metadata and allows for easier comprehension of your redistributive properties.
+# Review your options at https://choosealicense.com/. All rights reserved is the default copyright stance, and is thus the default here.
+license = "MIT"
+# A URL to refer people to when problems occur with this mod
+#issueTrackerURL="https://change.me.to.your.issue.tracker.example.invalid/" #optional
+# A list of mods - how many allowed here is determined by the individual mod loader
+[[mods]] #mandatory
+# The modid of the mod
+modId = "net_music_can_play_bili" #mandatory
+# The version number of the mod
+version = "0.7.9-beta+neo1.21.1" #mandatory
+# A display name for the mod
+displayName = "Net Music Can Play Bili" #mandatory
+# A URL to query for updates for this mod. See the JSON update specification https://docs.neoforge.net/docs/misc/updatechecker/
+#updateJSONURL="https://change.me.example.invalid/updates.json" #optional
+# A URL for the "homepage" for this mod, displayed in the mod UI
+#displayURL="https://change.me.to.your.mods.homepage.example.invalid/" #optional
+# A file name (in the root of the mod JAR) containing a logo for display
+logoFile="logo.png" #optional
+# A text field displayed in the mod UI
+#credits="" #optional
+# A text field displayed in the mod UI
+authors = "zhongbai233" #optional
+
+# The description text for the mod (multi line!) (#mandatory)
+description = '''Adds Bilibili video audio support to NetMusic.
+Paste a Bilibili link (BVxxxx, avxxxx) into a music CD and play the audio directly.'''
+
+# The [[mixins]] block allows you to declare your mixin config to FML so that it gets loaded.
+[[mixins]]
+config = "net_music_can_play_bili.mixins.json"
+
+# ── NetMusic 依赖（必需） ─────────────────────────────────────────────────
+[[dependencies."net_music_can_play_bili"]]
+modId = "netmusic"
+type = "required"
+versionRange = "[1.5.2,)"
+ordering = "AFTER"
+side = "BOTH"
+reason = "NetMusicCanPlayBili is an addon for NetMusic — resolves Bilibili video URLs to playable audio"
+
+# ── NeoForge 依赖 ────────────────────────────────────────────────────────
+[[dependencies."net_music_can_play_bili"]] #optional
+modId = "neoforge" #mandatory
+type = "required" #mandatory
+versionRange = "[21.1,)" #mandatory
+ordering = "NONE"
+side = "BOTH"
+# Here's another dependency
+[[dependencies."net_music_can_play_bili"]]
+modId = "minecraft"
+type = "required"
+# This version range declares a minimum of the current minecraft version up to but not including the next major version
+versionRange = "[1.21.1,1.22)"
+ordering = "NONE"
+side = "BOTH"
+
+# ── Curios 饰品栏支持（可选；1.21.1 的 Curios 为 9.x，26.x 的 [12,) 范围会让其被禁用）──
+[[dependencies."net_music_can_play_bili"]]
+modId = "curios"
+type = "optional"
+versionRange = "[9.4,)"
+ordering = "AFTER"
+side = "BOTH"
+reason = "When Curios is installed, headphones and holographic glasses can be worn in Curios head slots"
+
+# ── AreaControl 展会区域隔音（可选）────────────────────────────────────────
+[[dependencies."net_music_can_play_bili"]]
+modId = "area_control"
+type = "optional"
+ordering = "AFTER"
+side = "BOTH"
+reason = "When AreaControl is installed, public audio fades across strict area boundaries"
+
+# Features are specific properties of the game environment, that you may want to declare you require. This example declares
+# that your mod requires GL version 3.2 or higher. Other features will be added. They are side aware so declaring this won't
+# stop your mod loading on the server for example.
+#[features."net_music_can_play_bili"]
+#openGLVersion="[3.2,)"

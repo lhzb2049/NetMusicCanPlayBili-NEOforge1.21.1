@@ -1,0 +1,54 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.zhongbai233.net_music_can_play_bili.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "ModernTurntableControlPacketSubLevelScopeMixin",
+    "VideoProjectorConfigPacketSubLevelScopeMixin",
+    "LyricProjectorConfigPacketSubLevelScopeMixin",
+    "SpeakerConfigPacketSubLevelScopeMixin",
+    "LiveStreamerControlPacketSubLevelScopeMixin",
+    "ControlConsoleEditLeasePacketSubLevelScopeMixin",
+    "ControlConsoleConfigPacketSubLevelScopeMixin",
+    "ControlConsoleAccessPacketSubLevelScopeMixin",
+    "AudioSubscriptionSubLevelDistanceMixin",
+    "AudienceSyncLevelScopeMixin",
+    "SetMusicIDMessageMixin",
+    "TileEntityMusicPlayerMixin"
+  ],
+  "client": [
+    "ClientAudioOutputRegistryLivePositionMixin",
+    "ControlConsoleAudioElementPositionMixin",
+    "VideoScreenOcclusionSubLevelMixin",
+    "VideoProjectorVisibilityDistanceMixin",
+    "AudioUtilsSubLevelPositionMixin",
+    "ClientAudioDemandSubLevelDistanceMixin",
+    "ModernTurntableSoundSubLevelSourceMixin",
+    "BiliQrLoginScreenQrBlitFixMixin",
+    "OffscreenGuiPassFixMixin",
+    "OffscreenGuiProjectionFixMixin",
+    "NcpbNetworkTuningMixin",
+    "AbstractContainerScreenMixin",
+    "BigMegaphoneScreenMixin",
+    "ButtonAccessor",
+    "CDBurnerMenuScreenMixin",
+    "ClientPacketListenerBlockUpdateMixin",
+    "ComputerMenuScreenMixin",
+    "GuiRoamingCrosshairMixin",
+    "EntityTurnRoamingMixin",
+    "ItemInHandRendererMixin",
+    "KeyboardHandlerRoamingMixin",
+    "LibraryAccessor",
+    "MusicToClientMessageClientMixin",
+    "ScreenAccessor",
+    "SoundEngineAccessor",
+    "SoundManagerAccessor"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "overwrites": {
+    "requireAnnotations": true
+  }
+}
