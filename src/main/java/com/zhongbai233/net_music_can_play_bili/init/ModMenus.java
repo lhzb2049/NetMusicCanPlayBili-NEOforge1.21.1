@@ -11,10 +11,10 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 public final class ModMenus {
    public static final DeferredRegister<MenuType<?>> MENU_TYPES = DeferredRegister.create(Registries.MENU, "net_music_can_play_bili");
    public static final DeferredHolder<MenuType<?>, MenuType<MediaToolBindingMenu>> MEDIA_TOOL_BINDING = MENU_TYPES.register(
-      "media_tool_binding", () -> new MenuType(MediaToolBindingMenu::new, FeatureFlags.DEFAULT_FLAGS)
+      "media_tool_binding", () -> new MenuType<MediaToolBindingMenu>(MediaToolBindingMenu::new, FeatureFlags.DEFAULT_FLAGS)
    );
    public static final DeferredHolder<MenuType<?>, MenuType<MediaToolReportMenu>> MEDIA_TOOL_REPORT = MENU_TYPES.register(
-      "media_tool_report", () -> new MenuType(MediaToolReportMenu::new, FeatureFlags.DEFAULT_FLAGS)
+      "media_tool_report", () -> new MenuType<MediaToolReportMenu>(MediaToolReportMenu::new, FeatureFlags.DEFAULT_FLAGS)
    );
 
    private ModMenus() {
