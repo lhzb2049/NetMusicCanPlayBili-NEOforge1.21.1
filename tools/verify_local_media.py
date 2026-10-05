@@ -134,6 +134,35 @@ RUNS = {
             'link-escape': ('LOCAL_VIDEO', False, DENY_ROOTS),
         },
     },
+    'F': {
+        'desc': '不设置 enabled → 阶段 1 起默认开启',
+        'props': {},
+        'expect': {
+            'local-abs-video': ('LOCAL_VIDEO', True, ALLOW),
+            'local-abs-image': ('LOCAL_IMAGE', True, ALLOW),
+            'forbidden-root': ('LOCAL_VIDEO', False, DENY_ROOTS),
+        },
+    },
+    'S': {
+        'desc': '阶段 1：本地图片缩放（纯逻辑，不依赖文件系统）',
+        'props': {},
+        'expect': {
+            'scaler-identity-dims': ('8x8', None, None),
+            'scaler-identity-same-array': ('true', None, None),
+            'scaler-aspect-dims': ('2048x1536', None, None),
+            'scaler-box-average': ('ff8a8a8a', None, None),
+            'scaler-downscale-dims': ('4x4', None, None),
+            'scaler-downscale-length': ('16', None, None),
+            'scaler-downscale-pixel': ('ffffffff', None, None),
+            'scaler-zero-guard': ('1x1', None, None),
+            'scaler-no-upscale': ('4x4', None, None),
+            'header-png-dims': ('1920x1080', None, None),
+            'header-jpeg-dims': ('640x480', None, None),
+            'header-unknown': ('null', None, None),
+            'header-exceeds-yes': ('true', None, None),
+            'header-exceeds-no': ('false', None, None),
+        },
+    },
 }
 
 

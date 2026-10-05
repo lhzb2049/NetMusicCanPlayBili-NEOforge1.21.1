@@ -1,4 +1,51 @@
 {
+ "com.zhongbai233.net_music_can_play_bili.client.media.ClientLocalImageProjection": [
+  "f|000a|boundLevel|Ljava/lang/Object;",
+  "f|001a|LOGGER|Lorg/slf4j/Logger;",
+  "f|001a|MAX_TEXTURES|I",
+  "f|001a|PENDING|Ljava/util/Map;",
+  "f|001a|PROJECTOR_TEXTURES|Ljava/util/Map;",
+  "f|001a|TEXTURES|Ljava/util/Map;",
+  "m|0002|<init>|()V",
+  "m|0008|<clinit>|()V",
+  "m|0009|clearAll|()V",
+  "m|0009|frameForProjector|(Lnet/minecraft/core/BlockPos;)Lcom/zhongbai233/net_music_can_play_bili/client/renderer/video/VideoBillboardState$ProjectorFrameSnapshot;",
+  "m|0009|syncFromTurntable|(Lcom/zhongbai233/net_music_can_play_bili/blockentity/ModernTurntableBlockEntity;Lnet/minecraft/core/BlockPos;)V",
+  "m|000a|digest|(Ljava/lang/String;J)Ljava/lang/String;",
+  "m|000a|ensureSameLevel|()V",
+  "m|000a|evictIfNeeded|()V",
+  "m|000a|fail|(Ljava/lang/String;Ljava/lang/String;)V",
+  "m|000a|idFor|(Ljava/lang/String;J)Lnet/minecraft/resources/ResourceLocation;",
+  "m|000a|keyOf|(Ljava/lang/String;)Ljava/lang/String;",
+  "m|000a|load|(Ljava/lang/String;Ljava/lang/String;)V",
+  "m|000a|readHeaderDimensions|(Ljava/nio/file/Path;)[I",
+  "m|000a|requestLoad|(Ljava/lang/String;Ljava/lang/String;)V",
+  "m|000a|textureFor|(Ljava/lang/String;)Lcom/zhongbai233/net_music_can_play_bili/client/media/ClientLocalImageProjection$Entry;",
+  "m|100a|lambda$evictIfNeeded$1|ret:Z",
+  "m|100a|lambda$requestLoad$0|ret:V"
+ ],
+ "com.zhongbai233.net_music_can_play_bili.client.media.ClientLocalImageProjection$Entry": [
+  "f|0010|height|I",
+  "f|0010|id|Lnet/minecraft/resources/ResourceLocation;",
+  "f|0010|reason|Ljava/lang/String;",
+  "f|0010|width|I",
+  "m|0000|<init>|(Lnet/minecraft/resources/ResourceLocation;IILjava/lang/String;)V"
+ ],
+ "com.zhongbai233.net_music_can_play_bili.client.media.LocalImageHeaderProbe": [
+  "f|001a|PNG_SIGNATURE|[B",
+  "m|0002|<init>|()V",
+  "m|0008|<clinit>|()V",
+  "m|0008|jpegDimensions|([B)[I",
+  "m|0008|pngDimensions|([B)[I",
+  "m|0009|dimensions|([B)[I",
+  "m|0009|exceeds|(IIJ)Z",
+  "m|000a|readInt|([BI)I"
+ ],
+ "com.zhongbai233.net_music_can_play_bili.client.media.LocalImageScaler": [
+  "m|0002|<init>|()V",
+  "m|0009|fit|(IIII)[I",
+  "m|0009|scale|([IIIII)[I"
+ ],
  "com.zhongbai233.net_music_can_play_bili.client.media.LocalMediaPolicy": [
   "f|001a|RESERVED_DEVICE_NAMES|Ljava/util/Set;",
   "m|0002|<init>|()V",
@@ -24,14 +71,22 @@
  "com.zhongbai233.net_music_can_play_bili.client.media.LocalMediaProperties": [
   "f|0018|ENABLED|Ljava/lang/String;",
   "f|0018|MAX_BYTES|Ljava/lang/String;",
+  "f|0018|MAX_IMAGE_HEIGHT|Ljava/lang/String;",
+  "f|0018|MAX_IMAGE_PIXELS|Ljava/lang/String;",
+  "f|0018|MAX_IMAGE_WIDTH|Ljava/lang/String;",
   "f|0018|ROOTS|Ljava/lang/String;",
   "f|001a|DEFAULT_MAX_BYTES|J",
+  "f|001a|DEFAULT_MAX_IMAGE_PIXELS|J",
+  "f|001a|DEFAULT_MAX_IMAGE_SIDE|I",
   "m|0002|<init>|()V",
   "m|0008|configuredRoots|()Ljava/util/List;",
   "m|0008|defaultRootCandidates|(Ljava/lang/String;)Ljava/util/List;",
   "m|0008|describeRoots|(Ljava/util/List;)Ljava/lang/String;",
   "m|0008|enabled|()Z",
-  "m|0008|maxBytes|()J"
+  "m|0008|maxBytes|()J",
+  "m|0008|maxImageHeight|()I",
+  "m|0008|maxImagePixels|()J",
+  "m|0008|maxImageWidth|()I"
  ],
  "com.zhongbai233.net_music_can_play_bili.client.media.MediaLogThrottle": [
   "f|001a|LAST_PAYLOAD|Ljava/util/Map;",

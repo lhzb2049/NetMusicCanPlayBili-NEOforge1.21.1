@@ -49,6 +49,40 @@ public final class VerifyLocalMediaProbe {
       emit("oversized", sandbox + "\\big\\large.mp4", sandbox);
       emit("peer-root", peer + "\\d.mp4", sandbox);
 
+      // --- 阶段 1：本地图片的纯逻辑缩放（不涉及 Minecraft 类）---
+      int[] white = new int[8 * 8];
+      java.util.Arrays.fill(white, 0xFFFFFFFF);
+      int[] whiteFit = LocalImageScaler.fit(8, 8, 2048, 2048);
+      int[] scaledWhite = LocalImageScaler.scale(white, 8, 8, whiteFit[0], whiteFit[1]);
+      System.out.println("scaler-identity-dims|" + whiteFit[0] + "x" + whiteFit[1]);
+      System.out.println("scaler-identity-same-array|" + (scaledWhite == white));
+
+      int[] aspectFit = LocalImageScaler.fit(4000, 3000, 2048, 2048);
+      System.out.println("scaler-aspect-dims|" + aspectFit[0] + "x" + aspectFit[1]);
+
+      int[] twoByTwo = new int[]{0xFF000000, 0xFF646464, 0xFFC8C8C8, 0xFFFFFFFF};
+      System.out.println("scaler-box-average|" + Integer.toHexString(LocalImageScaler.scale(twoByTwo, 2, 2, 1, 1)[0]));
+
+      int[] downFit = LocalImageScaler.fit(8, 8, 4, 4);
+      int[] downWhite = LocalImageScaler.scale(white, 8, 8, downFit[0], downFit[1]);
+      System.out.println("scaler-downscale-dims|" + downFit[0] + "x" + downFit[1]);
+      System.out.println("scaler-downscale-length|" + downWhite.length);
+      System.out.println("scaler-downscale-pixel|" + Integer.toHexString(downWhite[0]));
+
+      int[] zeroFit = LocalImageScaler.fit(0, 0, 2048, 2048);
+      System.out.println("scaler-zero-guard|" + zeroFit[0] + "x" + zeroFit[1]);
+      int[] upFit = LocalImageScaler.fit(4, 4, 8, 8);
+      System.out.println("scaler-no-upscale|" + upFit[0] + "x" + upFit[1]);
+
+      // --- 阶段 1：图片文件头解析（解码前的保护性检查，纯逻辑）---
+      System.out.println("header-png-dims|" + dimsOf(pngHeader(1920, 1080)));
+      System.out.println("header-jpeg-dims|" + dimsOf(jpegHeader(640, 480)));
+      System.out.println("header-unknown|" + dimsOf(new byte[]{
+         (byte) 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10
+      }));
+      System.out.println("header-exceeds-yes|" + LocalImageHeaderProbe.exceeds(20000, 20000, 64000000L));
+      System.out.println("header-exceeds-no|" + LocalImageHeaderProbe.exceeds(4000, 3000, 64000000L));
+
       MediaLogThrottle.clear();
       System.out.println("log-throttle-first|" + MediaLogThrottle.shouldLog("k", "v"));
       System.out.println("log-throttle-repeat|" + MediaLogThrottle.shouldLog("k", "v"));
@@ -61,5 +95,46 @@ public final class VerifyLocalMediaProbe {
       System.out.println(
          id + "|" + classification.kind() + "|" + classification.allowed() + "|" + classification.reason()
       );
+   }
+
+   private static String dimsOf(byte[] head) {
+      int[] dims = LocalImageHeaderProbe.dimensions(head);
+      return dims == null ? "null" : dims[0] + "x" + dims[1];
+   }
+
+   private static byte[] pngHeader(int width, int height) {
+      byte[] head = new byte[24];
+      byte[] signature = new byte[]{(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
+      System.arraycopy(signature, 0, head, 0, signature.length);
+      head[11] = 13;
+      head[12] = 'I';
+      head[13] = 'H';
+      head[14] = 'D';
+      head[15] = 'R';
+      putInt(head, 16, width);
+      putInt(head, 20, height);
+      return head;
+   }
+
+   private static byte[] jpegHeader(int width, int height) {
+      byte[] head = new byte[20];
+      head[0] = (byte) 0xFF;
+      head[1] = (byte) 0xD8;
+      head[2] = (byte) 0xFF;
+      head[3] = (byte) 0xC0;
+      head[5] = 17;
+      head[6] = 8;
+      head[7] = (byte) (height >> 8);
+      head[8] = (byte) height;
+      head[9] = (byte) (width >> 8);
+      head[10] = (byte) width;
+      return head;
+   }
+
+   private static void putInt(byte[] data, int offset, int value) {
+      data[offset] = (byte) (value >>> 24);
+      data[offset + 1] = (byte) (value >>> 16);
+      data[offset + 2] = (byte) (value >>> 8);
+      data[offset + 3] = (byte) value;
    }
 }

@@ -443,6 +443,8 @@ INTENTIONAL_FIX_BODY_ONLY = {
         'Patch B：shouldShowIrisWarning() 追加 isCustomYuvShaderAvailable() 前置条件',
     'com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoPipelineProperties':
         'Patch B：iris_warning_placeholder_view_depth_offset 默认值 0.03 → 0.0',
+    'com.zhongbai233.net_music_can_play_bili.client.renderer.VideoProjectorRenderer':
+        '阶段 1：extract() 增加本地图片分支（与播放状态无关），getRenderBoundingBox() 优先用图片帧的宽高比',
 }
 
 # 有意分歧是**逐条**登记的，不是按类放行：清单命中的这一条差异不计入失败，
@@ -475,6 +477,12 @@ INTENTIONAL_FIX_NEW_CLASSES = {
         '阶段 0：UNC / 保留设备名 / 真实路径（含目录联接逃逸）/ 大小校验',
     'com.zhongbai233.net_music_can_play_bili.client.media.MediaLogThrottle':
         '阶段 0：每帧路径的日志去重闸门',
+    'com.zhongbai233.net_music_can_play_bili.client.media.LocalImageScaler':
+        '阶段 1：本地图片的盒式缩放（纯逻辑，可离线验证）',
+    'com.zhongbai233.net_music_can_play_bili.client.media.ClientLocalImageProjection':
+        '阶段 1：本地图片 → 投影仪（动态纹理 + 静态帧，纹理加载排在客户端线程队列）',
+    'com.zhongbai233.net_music_can_play_bili.client.media.LocalImageHeaderProbe':
+        '阶段 1：PNG/JPEG 文件头宽高解析（解码前的像素规模保护）',
 }
 # --- 阶段 0 的接线只改方法体，但新增字符串拼接 → 新增 indy（makeConcatWithConstants）调用点 ---
 # ③d 按「类 → (基线条数, 产物条数)」登记：条数对不上仍然判失败（比按类放行更强）。

@@ -9,6 +9,7 @@ import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEn
 import com.zhongbai233.net_music_can_play_bili.client.HolographicGlassesClient;
 import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackTracker;
+import com.zhongbai233.net_music_can_play_bili.client.media.ClientLocalImageProjection;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardState;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoSurfacePrivacyPolicy;
@@ -86,8 +87,16 @@ public class VideoProjectorRenderer implements BlockEntityRenderer<VideoProjecto
             return state;
          } else {
             ClientLinkRegistry.link(projector.getBlockPos(), linkedPos);
-            state.visible = turntable.isPlaying();
-            if (state.visible) {
+            // 本地图片：海报式静态画面，与唱片机是否在播放无关。同步只做查表 + TTL 判定，
+            // 真正的纹理加载排在客户端线程队列里（避免在方块实体渲染过程中做 GL 上传）。
+            ClientLocalImageProjection.syncFromTurntable(turntable, projector.getBlockPos());
+            VideoBillboardState.ProjectorFrameSnapshot localImage = ClientLocalImageProjection.frameForProjector(
+               projector.getBlockPos()
+            );
+            state.visible = localImage != null || turntable.isPlaying();
+            if (localImage != null) {
+               state.frame = localImage;
+            } else if (state.visible) {
                VideoBillboardPreview.attachProjectorToTurntable(linkedPos, projector.getBlockPos());
                PlaybackSync.Metadata sync = turntable.getPlaybackSyncMetadata();
                state.setPlaybackSessionId(sync.playbackSessionId());
@@ -164,7 +173,12 @@ public class VideoProjectorRenderer implements BlockEntityRenderer<VideoProjecto
    }
 
    public AABB getRenderBoundingBox(VideoProjectorBlockEntity blockEntity) {
-      VideoBillboardState.ProjectorFrameSnapshot frame = VideoBillboardPreview.currentProjectorDisplayFrame(blockEntity.getBlockPos());
+      VideoBillboardState.ProjectorFrameSnapshot localImage = ClientLocalImageProjection.frameForProjector(
+         blockEntity.getBlockPos()
+      );
+      VideoBillboardState.ProjectorFrameSnapshot frame = localImage != null
+         ? localImage
+         : VideoBillboardPreview.currentProjectorDisplayFrame(blockEntity.getBlockPos());
       double aspect = frame.width() > 0 && frame.height() > 0 ? (double)frame.width() / frame.height() : 1.7777777777777777;
       aspect = Math.min(RENDER_BOUNDS.maxAspect(), Math.max(0.125, aspect));
       return ProjectorScreenBounds.aroundBlock(

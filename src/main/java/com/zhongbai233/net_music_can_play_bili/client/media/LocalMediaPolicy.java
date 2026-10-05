@@ -49,7 +49,7 @@ final class LocalMediaPolicy {
       }
 
       if (!LocalMediaProperties.enabled()) {
-         return deny("本地媒体通路未启用（-D" + LocalMediaProperties.ENABLED + "=true 开启）");
+         return deny("本地媒体通路未启用（已显式设置 -D" + LocalMediaProperties.ENABLED + "=false）");
       }
 
       Path effective = realOrSelf(absolute);
