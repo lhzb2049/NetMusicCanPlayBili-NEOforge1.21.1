@@ -11,6 +11,8 @@ import com.zhongbai233.net_music_can_play_bili.bili.HttpAudioStreamHandler;
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.LiveStreamerVideoClient;
 import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient;
+import com.zhongbai233.net_music_can_play_bili.client.media.MediaLogThrottle;
+import com.zhongbai233.net_music_can_play_bili.client.media.MediaSourceClassifier;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPrepareProperties;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ModernTurntablePlaybackDiagnostics;
@@ -99,7 +101,15 @@ public final class ModernTurntablePlaybackCoordinator {
             } else {
                String playUrl = prepared.playUrl();
                if (!PlayableMediaUrl.isHttp(playUrl)) {
-                  LOGGER.warn("普通唱片机拒绝非 HTTP(S) 解析结果: song='{}' value='{}'", command.songName(), playUrl);
+                  MediaSourceClassifier.Classification source = MediaSourceClassifier.classifyThrottled(
+                     playUrl, Minecraft.getInstance().gameDirectory.getAbsolutePath()
+                  );
+                  if (MediaLogThrottle.shouldLog("turntable-audio-non-http|" + playUrl, source.summary())) {
+                     LOGGER.warn(
+                        "普通唱片机拒绝非 HTTP(S) 解析结果: song='{}' 源分类={} allowed={} 原因={} value='{}'",
+                        new Object[]{command.songName(), source.kind(), source.allowed(), source.reason(), playUrl}
+                     );
+                  }
                } else {
                   BiliPlaybackDiagnostics.beginPlayback(command.songName(), command.rawUrl(), playUrl);
                   LOGGER.debug("B站/NetMusic 普通唱片机兼容播放: song='{}' audioHost={}", command.songName(), ClientMediaPreparer.hostOf(playUrl));

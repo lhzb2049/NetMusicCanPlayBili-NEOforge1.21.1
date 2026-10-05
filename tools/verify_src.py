@@ -335,14 +335,27 @@ def member_key_strict(m, mask=0):
 
 
 def check_members(base, built, focus):
-    diffs, info, hits = [], [], []
+    diffs, info, hits, new_class_notes = [], [], [], []
     names = sorted(set(base) | set(built))
     for n in names:
         b, u = base.get(n), built.get(n)
         if b is None:
-            diffs.append('%s: 只在基线 jar 里存在' % n); continue
+            # 只存在于产物的类：没有基线可比，改用 new_class_manifest.json 逐条校验成员
+            if not is_intentional_new_class(n):
+                diffs.append('%s: 只在编译产物里存在' % n); continue
+            recorded = new_class_manifest().get(n)
+            got = sorted(member_key(m, 0) for m in u['members'])
+            if recorded is None:
+                diffs.append('%s: 有意新增的类没有登记到 tools/new_class_manifest.json' % n)
+            elif sorted(recorded) != got:
+                diffs.append('%s: 有意新增类的成员与 new_class_manifest.json 不一致\n'
+                             '        清单=[%s]\n        产物=[%s]'
+                             % (n, ', '.join(sorted(recorded)), ', '.join(got)))
+            else:
+                new_class_notes.append('%s: 有意新增类，%d 个成员与清单一致' % (n, len(got)))
+            continue
         if u is None:
-            diffs.append('%s: 只在编译产物里存在' % n); continue
+            diffs.append('%s: 只在基线 jar 里存在' % n); continue
 
         # 类级访问标志（白名单类先按规则取模再比）
         ba, ua = b['access'], u['access']
@@ -386,6 +399,7 @@ def check_members(base, built, focus):
             'intentional_diffs': diff_sort(intentional, focus),
             'intentional_classes': sorted({d.split(':', 1)[0] for d in intentional}),
             'intentional_unmatched': unmatched,
+            'new_class_manifest_hits': new_class_notes,
             'whitelist_hits': sorted(set(hits)),
             'informational_diffs': info,
             'informational_note': 'ACC_SYNTHETIC 成员（javac 生成的 lambda 体）的参数顺序/擦除类型差异，'
@@ -449,6 +463,127 @@ INTENTIONAL_FIX_DIFFS = {
     _IFP + ': 多出成员 m|0008|customYuvShaderDisabledWhen|(Z)Z',
     _IFP + ': 多出成员 m|000a|explicitBoolean|(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Boolean;',
 }
+
+# --- 阶段 0（本地媒体源识别层）新增的类：③a/③b 会报「只在产物里存在」，按类登记 ---
+INTENTIONAL_FIX_NEW_CLASSES = {
+    'com.zhongbai233.net_music_can_play_bili.client.media.SourceKind': '阶段 0：媒体源种类枚举',
+    'com.zhongbai233.net_music_can_play_bili.client.media.MediaSourceClassifier':
+        '阶段 0：媒体源识别（http / 本地视频 / 本地图片 / 不认识）+ 5 秒 TTL 记忆化',
+    'com.zhongbai233.net_music_can_play_bili.client.media.LocalMediaProperties':
+        '阶段 0：本地媒体开关、白名单根目录、大小上限',
+    'com.zhongbai233.net_music_can_play_bili.client.media.LocalMediaPolicy':
+        '阶段 0：UNC / 保留设备名 / 真实路径（含目录联接逃逸）/ 大小校验',
+    'com.zhongbai233.net_music_can_play_bili.client.media.MediaLogThrottle':
+        '阶段 0：每帧路径的日志去重闸门',
+}
+# --- 阶段 0 的接线只改方法体，但新增字符串拼接 → 新增 indy（makeConcatWithConstants）调用点 ---
+# ③d 按「类 → (基线条数, 产物条数)」登记：条数对不上仍然判失败（比按类放行更强）。
+INTENTIONAL_FIX_INDY = {
+    'com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient':
+        ((32, 33), '阶段 0：日志去重键 "turntable-video-source|" + rawUrl'),
+    'com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackCoordinator':
+        ((34, 35), '阶段 0：日志去重键 "turntable-audio-non-http|" + playUrl'),
+    'com.zhongbai233.net_music_can_play_bili.client.audio.SyncedMediaPlaybackLauncher':
+        ((2, 3), '阶段 0：日志去重键 "audio-non-http|" + playUrl'),
+}
+
+_INDY_COUNT_RE = re.compile(r'引导方法条数 基线=(\d+) 产物=(\d+)')
+_TOP_LEVEL_NEW_PREFIX = '只在产物: '
+
+# --- 新增类的「成员基线」清单（tools/new_class_manifest.json）---
+# 为什么需要它：对「只存在于产物」的新类，③b 没有基线可比，内部成员怎么改都看不出来
+# （实测过：往新类里改一个方法描述符，门禁毫无反应）。所以把每个登记新增类的成员键集合
+# 固化进清单，产物必须与清单逐条一致；不一致、或登记了却没进清单，都判失败。
+NEW_CLASS_MANIFEST_PATH = os.path.join(PROJ, 'tools', 'new_class_manifest.json')
+_NEW_CLASS_MANIFEST_CACHE = [None]
+
+
+def load_new_class_manifest():
+    if not os.path.isfile(NEW_CLASS_MANIFEST_PATH):
+        return {}
+    with open(NEW_CLASS_MANIFEST_PATH, encoding='utf-8') as fh:
+        return json.load(fh)
+
+
+def new_class_manifest():
+    if _NEW_CLASS_MANIFEST_CACHE[0] is None:
+        _NEW_CLASS_MANIFEST_CACHE[0] = load_new_class_manifest()
+    return _NEW_CLASS_MANIFEST_CACHE[0]
+
+
+def write_new_class_manifest(built):
+    """按当前编译产物重新生成新增类成员清单（人工确认后提交）。"""
+    manifest = {}
+    for name in sorted(INTENTIONAL_FIX_NEW_CLASSES):
+        entry = built.get(name)
+        if entry is None:
+            print('❌ 产物里找不到登记的新类: %s' % name)
+            return 2
+        manifest[name] = sorted(member_key(m, 0) for m in entry['members'])
+    for name in sorted(n for n in built if is_intentional_new_class(n) and n not in manifest):
+        manifest[name] = sorted(member_key(m, 0) for m in built[name]['members'])
+    with open(NEW_CLASS_MANIFEST_PATH, 'w', encoding='utf-8') as fh:
+        json.dump(manifest, fh, ensure_ascii=False, indent=1, sort_keys=True)
+        fh.write('\n')
+    print('✅ 已写出 %s（%d 个类）' % (NEW_CLASS_MANIFEST_PATH, len(manifest)))
+    return 0
+
+
+def diff_subject(check_key, text):
+    """取一条差异"说的是哪个类"。③a 的格式是「只在产物: <类>」，类名在冒号**之后**。"""
+    if check_key == 'top_level_classes' and text.startswith(_TOP_LEVEL_NEW_PREFIX):
+        return text[len(_TOP_LEVEL_NEW_PREFIX):].strip()
+    return text.split(':', 1)[0]
+
+
+def is_intentional_new_class(name):
+    if name in INTENTIONAL_FIX_NEW_CLASSES:
+        return True
+    return any(name.startswith(existing + '$') for existing in INTENTIONAL_FIX_NEW_CLASSES)
+
+
+def is_intentional_diff(check_key, text, indy_totals):
+    """判定一条差异是否属于「已登记的有意分歧」；三项检查粒度不同，这里集中处理。"""
+    name = diff_subject(check_key, text)
+    if check_key == 'member_signatures':
+        # 新增类不在这里放行：它们的成员由 new_class_manifest.json 逐条校验（不一致即失败）
+        return text in INTENTIONAL_FIX_DIFFS
+    if check_key == 'top_level_classes':
+        return text.startswith(_TOP_LEVEL_NEW_PREFIX) and is_intentional_new_class(name)
+    if check_key == 'bootstrap_methods':
+        entry = INTENTIONAL_FIX_INDY.get(name)
+        if entry is None:
+            return False
+        # 条目差异行本身不带总数：只有该类的条数行确实等于登记值时才算有意分歧；
+        # 这样「条数不变但条目被悄悄替换」仍然会判失败。
+        return indy_totals.get(name) == entry[0]
+    return False
+
+
+def apply_intentional(checks):
+    """把已登记的有意分歧从各检查的 diffs 移到 intentional_diffs，并按剩余差异重算状态。
+
+    只放行登记过的条目；清单之外（含登记类内部的其它改动）照旧判失败。
+    被移走的条目仍会完整打印并写进报告，不做隐藏。
+    """
+    for key, check in checks.items():
+        diffs = check.get('diffs') or []
+        if not diffs:
+            continue
+        indy_totals = {}
+        for text in diffs:
+            match = _INDY_COUNT_RE.search(text)
+            if match:
+                indy_totals[diff_subject(key, text)] = (int(match.group(1)), int(match.group(2)))
+        kept, moved = [], []
+        for text in diffs:
+            (moved if is_intentional_diff(key, text, indy_totals) else kept).append(text)
+        if moved:
+            check['diffs'] = kept
+            check['intentional_diffs'] = moved
+            check['intentional_classes'] = sorted({diff_subject(key, t) for t in moved})
+            check['status'] = 'pass' if not kept else 'fail'
+    return checks
 
 
 def _strip_rfbb(text):
@@ -559,6 +694,8 @@ def main():
     ap.add_argument('--built-jar', default=None)
     ap.add_argument('--report', default=DEFAULT_REPORT)
     ap.add_argument('--focus', default=None, help='差异清单优先展示命中该子串的条目')
+    ap.add_argument('--write-new-class-manifest', action='store_true',
+                    help='按当前编译产物重新生成 tools/new_class_manifest.json（人工确认后提交）')
     args = ap.parse_args()
 
     jar = os.path.abspath(args.jar)
@@ -588,6 +725,9 @@ def main():
     base = {n: parse_class(d) for n, d in base_bytes.items()}
     built = {n: parse_class(d) for n, d in built_bytes.items()}
 
+    if args.write_new_class_manifest:
+        return write_new_class_manifest(built)
+
     c_a = check_top_level(names_base, names_built, args.focus)
     c_b = check_members(base, built, args.focus)
     c_c = check_resources(jar, built_jar, args.focus)
@@ -595,6 +735,7 @@ def main():
 
     checks = {'top_level_classes': c_a, 'member_signatures': c_b,
               'resource_bytes': c_c, 'bootstrap_methods': c_d}
+    apply_intentional(checks)
     failed = [k for k, v in checks.items() if v['status'] == 'fail']
     skipped = [k for k, v in checks.items() if v['status'] == 'skipped']
 
@@ -618,13 +759,9 @@ def main():
     if c_b['informational_diffs']:
         print('      不计入判定的合成成员差异: %d 条（见 JSON 的 informational_diffs）'
               % len(c_b['informational_diffs']))
-    if c_b.get('intentional_diffs'):
-        print('      已登记的有意分歧: %d 条 / %d 个类 —— %s'
-              % (len(c_b['intentional_diffs']), len(c_b['intentional_classes']), INTENTIONAL_FIX_NOTE))
-        for name in c_b['intentional_classes']:
-            print('        · %s ← %s' % (name.split('.')[-1], INTENTIONAL_FIX_CLASSES.get(name, '')))
-        print('        只改方法体/字面量、签名不变的备案类: %s'
-              % ', '.join(sorted(k.split('.')[-1] for k in INTENTIONAL_FIX_BODY_ONLY)))
+    if c_b.get('new_class_manifest_hits'):
+        print('      有意新增类（成员与 new_class_manifest.json 逐条一致）: %d 个'
+              % len(c_b['new_class_manifest_hits']))
     print('[③c] 资源字节  : %d vs %d, 差异 %d %s'
           % (c_c['baseline_count'], c_c['built_count'], len(c_c['diffs']), mark(c_c)))
     print('[③d] indy 调用点: %d vs %d 条 BootstrapMethods, 差异 %d %s'
@@ -636,6 +773,27 @@ def main():
         print('      不计入判定的表内顺序差异: %d 个类（见 JSON 的 informational_diffs）'
               % (len([x for x in c_d['informational_diffs'] if '顺序不同' in x])))
 
+    intentional_total = sum(len(checks[k].get('intentional_diffs') or []) for k in checks)
+    if intentional_total:
+        print('      已登记的有意分歧: %d 条 —— %s' % (intentional_total, INTENTIONAL_FIX_NOTE))
+        for key, label in (('top_level_classes', '③a'), ('member_signatures', '③b'),
+                           ('bootstrap_methods', '③d')):
+            entries = checks[key].get('intentional_diffs') or []
+            if not entries:
+                continue
+            print('        [%s] %d 条 / %d 个类:'
+                  % (label, len(entries), len(checks[key].get('intentional_classes', []))))
+            for name in checks[key].get('intentional_classes', []):
+                reason = INTENTIONAL_FIX_CLASSES.get(name) or INTENTIONAL_FIX_NEW_CLASSES.get(name)
+                if reason is None:
+                    outer = name.split('$', 1)[0]
+                    reason = INTENTIONAL_FIX_CLASSES.get(outer) or INTENTIONAL_FIX_NEW_CLASSES.get(outer)
+                if reason is None and name in INTENTIONAL_FIX_INDY:
+                    reason = INTENTIONAL_FIX_INDY[name][1]
+                print('           · %s ← %s' % (name.split('.')[-1], reason or '（未登记原因）'))
+        print('        只改方法体/字面量、签名不变的备案类: %s'
+              % ', '.join(sorted(k.split('.')[-1] for k in INTENTIONAL_FIX_BODY_ONLY)))
+
     for key, label in (('top_level_classes', '③a'), ('member_signatures', '③b'),
                        ('resource_bytes', '③c'), ('bootstrap_methods', '③d')):
         d = checks[key]['diffs']
@@ -646,12 +804,15 @@ def main():
             if len(d) > MAX_PRINT:
                 print('   … 还有 %d 条' % (len(d) - MAX_PRINT))
 
-    if c_b.get('intentional_diffs'):
-        print('\n--- ③b 已登记的有意分歧（清单之外任何差异仍判失败）---')
-        for line in c_b['intentional_diffs'][:MAX_PRINT]:
-            print('   ' + line.replace('\n', '\n   '))
-        if len(c_b['intentional_diffs']) > MAX_PRINT:
-            print('   … 还有 %d 条' % (len(c_b['intentional_diffs']) - MAX_PRINT))
+    for key, label in (('top_level_classes', '③a'), ('member_signatures', '③b'),
+                       ('bootstrap_methods', '③d')):
+        entries = checks[key].get('intentional_diffs') or []
+        if entries:
+            print('\n--- %s 已登记的有意分歧（清单之外任何差异仍判失败）---' % label)
+            for line in entries[:MAX_PRINT]:
+                print('   ' + line.replace('\n', '\n   '))
+            if len(entries) > MAX_PRINT:
+                print('   … 还有 %d 条' % (len(entries) - MAX_PRINT))
 
     if errs:
         print('\n（javap 有 stderr 输出，首行：%s）' % errs[0][:120])
@@ -661,8 +822,9 @@ def main():
                           'informational_diffs': (len(c_b['informational_diffs'])
                                                   + len(c_d.get('informational_diffs', []))),
                           'explained_env_diffs': len(c_d.get('explained_env_diffs', [])),
-                          'intentional_fix_diffs': len(c_b.get('intentional_diffs', [])),
-                          'intentional_fix_classes': c_b.get('intentional_classes', []),
+                          'intentional_fix_diffs': sum(len(checks[k].get('intentional_diffs') or []) for k in checks),
+                          'intentional_fix_classes': sorted({name for k in checks
+                                                             for name in (checks[k].get('intentional_classes') or [])}),
                           'intentional_fix_note': INTENTIONAL_FIX_NOTE,
                           'intentional_fix_body_only': sorted(INTENTIONAL_FIX_BODY_ONLY),
                           'baseline_jar': jar, 'built_classes': classes, 'built_jar': built_jar,

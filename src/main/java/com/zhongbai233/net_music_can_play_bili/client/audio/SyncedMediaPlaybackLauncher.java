@@ -6,6 +6,8 @@ import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.bili.HttpAudioStreamHandler;
 import com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryProtection;
+import com.zhongbai233.net_music_can_play_bili.client.media.MediaLogThrottle;
+import com.zhongbai233.net_music_can_play_bili.client.media.MediaSourceClassifier;
 import com.zhongbai233.net_music_can_play_bili.media.sync.MediaRequestToken;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackRequest;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
@@ -78,7 +80,16 @@ public final class SyncedMediaPlaybackLauncher {
       } else {
          String playUrl = prepared != null ? prepared.playUrl() : fallbackPlayUrl;
          if (!PlayableMediaUrl.isHttp(playUrl)) {
-            LOGGER.warn("拒绝注册非 HTTP(S) 同步媒体地址: song='{}' value='{}'", songName, playUrl);
+            MediaSourceClassifier.Classification source = MediaSourceClassifier.classifyThrottled(
+               playUrl, Minecraft.getInstance().gameDirectory.getAbsolutePath()
+            );
+            if (MediaLogThrottle.shouldLog("audio-non-http|" + playUrl, source.summary())) {
+               LOGGER.warn(
+                  "拒绝注册非 HTTP(S) 同步媒体地址: song='{}' 源分类={} allowed={} 原因={} value='{}'",
+                  new Object[]{songName, source.kind(), source.allowed(), source.reason(), playUrl}
+               );
+            }
+
             return null;
          } else {
             LyricRecord lyricRecord = prepared != null ? prepared.lyricRecord() : null;

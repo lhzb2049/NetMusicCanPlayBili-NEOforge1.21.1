@@ -359,6 +359,11 @@ def main():
     allowlisted_class = os.path.join(
         classes, 'com', 'zhongbai233', 'net_music_can_play_bili',
         'client', 'renderer', 'video', 'IrisShaderpackProperties.class')
+    # 阶段 0 登记为「有意新增」的类：用来证明新增类白名单只放行「这个类存在」这一条，
+    # 它**内部**的成员差异仍然必须判失败。
+    new_class_target = os.path.join(
+        classes, 'com', 'zhongbai233', 'net_music_can_play_bili',
+        'client', 'media', 'MediaSourceClassifier.class')
     os.makedirs(FAULTS_DIR, exist_ok=True)
 
     def simple(p):
@@ -374,6 +379,8 @@ def main():
     print('  合成靶子 : %s' % (os.path.relpath(lambda_class, classes) if lambda_class else '<未找到>'))
     print('  清单内靶子: %s' % (os.path.relpath(allowlisted_class, classes)
                               if os.path.isfile(allowlisted_class) else '<未找到>'))
+    print('  新增类靶子: %s' % (os.path.relpath(new_class_target, classes)
+                              if os.path.isfile(new_class_target) else '<未找到>'))
     print('=' * 78)
 
     groups = [
@@ -389,6 +396,8 @@ def main():
          '改合成 lambda 的返回类型 V -> I'),
         ('G', 'member_signatures', allowlisted_class, inject_descriptor, simple(allowlisted_class),
          '在「已登记有意分歧」的类内部制造清单外新差异'),
+        ('H', 'member_signatures', new_class_target, inject_descriptor, simple(new_class_target),
+         '在「有意新增」的类内部制造成员差异'),
     ]
 
     results = []

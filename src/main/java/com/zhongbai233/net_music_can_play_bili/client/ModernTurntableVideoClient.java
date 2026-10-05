@@ -7,6 +7,8 @@ import com.zhongbai233.net_music_can_play_bili.blockentity.LiveStreamerBlockEnti
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackTracker;
+import com.zhongbai233.net_music_can_play_bili.client.media.MediaLogThrottle;
+import com.zhongbai233.net_music_can_play_bili.client.media.MediaSourceClassifier;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardState;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoCloseDiagnostics;
@@ -195,7 +197,17 @@ public final class ModernTurntableVideoClient {
             String cleanRawUrl = PlaybackSync.strip(rawUrl);
             BiliApiClient.VideoSelection selection = BiliVideoStreamResolver.selectionOrNull(cleanRawUrl);
             if (selection == null) {
-               LOGGER.debug("现代唱片机视频同步跳过: 无法识别 B站视频 URL: rawUrl={}", cleanRawUrl);
+               // 本方法是每帧执行的（ControlConsoleRenderer 两个调用点 + VideoProjectorRenderer）：
+               // 同一串地址只在判定结果变化时打一条，避免 60~120 条/秒刷屏
+               MediaSourceClassifier.Classification source = MediaSourceClassifier.classifyThrottled(
+                  cleanRawUrl, Minecraft.getInstance().gameDirectory.getAbsolutePath()
+               );
+               if (MediaLogThrottle.shouldLog("turntable-video-source|" + cleanRawUrl, source.summary())) {
+                  LOGGER.debug(
+                     "现代唱片机视频同步跳过: 未识别为 B站视频; 源分类={} allowed={} 原因={} rawUrl={}",
+                     new Object[]{source.kind(), source.allowed(), source.reason(), cleanRawUrl}
+                  );
+               }
             } else {
                String sessionId = playbackSessionId.value();
                BlockPos immutableTurntablePos = turntablePos != null ? turntablePos.immutable() : null;

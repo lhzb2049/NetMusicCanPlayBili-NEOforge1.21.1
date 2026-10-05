@@ -1,0 +1,101 @@
+{
+ "com.zhongbai233.net_music_can_play_bili.client.media.LocalMediaPolicy": [
+  "f|001a|RESERVED_DEVICE_NAMES|Ljava/util/Set;",
+  "m|0002|<init>|()V",
+  "m|0008|<clinit>|()V",
+  "m|0008|check|(Ljava/nio/file/Path;Ljava/lang/String;)Lcom/zhongbai233/net_music_can_play_bili/client/media/LocalMediaPolicy$Decision;",
+  "m|0008|effectiveRoots|(Ljava/lang/String;)Ljava/util/List;",
+  "m|0008|hasReservedDeviceName|(Ljava/nio/file/Path;)Z",
+  "m|0008|isUnc|(Ljava/nio/file/Path;)Z",
+  "m|000a|deny|(Ljava/lang/String;)Lcom/zhongbai233/net_music_can_play_bili/client/media/LocalMediaPolicy$Decision;",
+  "m|000a|realOrSelf|(Ljava/nio/file/Path;)Ljava/nio/file/Path;",
+  "m|000a|toPath|(Ljava/lang/String;)Ljava/nio/file/Path;"
+ ],
+ "com.zhongbai233.net_music_can_play_bili.client.media.LocalMediaPolicy$Decision": [
+  "f|0012|allowed|Z",
+  "f|0012|reason|Ljava/lang/String;",
+  "m|0000|<init>|(ZLjava/lang/String;)V",
+  "m|0001|allowed|()Z",
+  "m|0001|reason|()Ljava/lang/String;",
+  "m|0011|equals|(Ljava/lang/Object;)Z",
+  "m|0011|hashCode|()I",
+  "m|0011|toString|()Ljava/lang/String;"
+ ],
+ "com.zhongbai233.net_music_can_play_bili.client.media.LocalMediaProperties": [
+  "f|0018|ENABLED|Ljava/lang/String;",
+  "f|0018|MAX_BYTES|Ljava/lang/String;",
+  "f|0018|ROOTS|Ljava/lang/String;",
+  "f|001a|DEFAULT_MAX_BYTES|J",
+  "m|0002|<init>|()V",
+  "m|0008|configuredRoots|()Ljava/util/List;",
+  "m|0008|defaultRootCandidates|(Ljava/lang/String;)Ljava/util/List;",
+  "m|0008|describeRoots|(Ljava/util/List;)Ljava/lang/String;",
+  "m|0008|enabled|()Z",
+  "m|0008|maxBytes|()J"
+ ],
+ "com.zhongbai233.net_music_can_play_bili.client.media.MediaLogThrottle": [
+  "f|001a|LAST_PAYLOAD|Ljava/util/Map;",
+  "f|001a|MAX_ENTRIES|I",
+  "m|0002|<init>|()V",
+  "m|0008|<clinit>|()V",
+  "m|0009|clear|()V",
+  "m|0009|shouldLog|(Ljava/lang/String;Ljava/lang/String;)Z",
+  "m|0009|size|()I"
+ ],
+ "com.zhongbai233.net_music_can_play_bili.client.media.MediaSourceClassifier": [
+  "f|001a|CACHE_MAX_ENTRIES|I",
+  "f|001a|CACHE_TTL_NANOS|J",
+  "f|001a|CACHE|Ljava/util/Map;",
+  "f|001a|IMAGE_EXTENSIONS|Ljava/util/Set;",
+  "f|001a|VIDEO_EXTENSIONS|Ljava/util/Set;",
+  "m|0002|<init>|()V",
+  "m|0008|<clinit>|()V",
+  "m|0008|kindOf|(Ljava/nio/file/Path;)Lcom/zhongbai233/net_music_can_play_bili/client/media/SourceKind;",
+  "m|0008|resolveLocalPath|(Ljava/lang/String;)Ljava/nio/file/Path;",
+  "m|0009|classifyThrottled|(Ljava/lang/String;Ljava/lang/String;)Lcom/zhongbai233/net_music_can_play_bili/client/media/MediaSourceClassifier$Classification;",
+  "m|0009|classify|(Ljava/lang/String;Ljava/lang/String;)Lcom/zhongbai233/net_music_can_play_bili/client/media/MediaSourceClassifier$Classification;",
+  "m|0009|clearCache|()V",
+  "m|000a|isSeparator|(C)Z"
+ ],
+ "com.zhongbai233.net_music_can_play_bili.client.media.MediaSourceClassifier$CachedClassification": [
+  "f|0012|classification|Lcom/zhongbai233/net_music_can_play_bili/client/media/MediaSourceClassifier$Classification;",
+  "f|0012|expiresAtNanos|J",
+  "m|0001|classification|()Lcom/zhongbai233/net_music_can_play_bili/client/media/MediaSourceClassifier$Classification;",
+  "m|0001|expiresAtNanos|()J",
+  "m|0002|<init>|(Lcom/zhongbai233/net_music_can_play_bili/client/media/MediaSourceClassifier$Classification;J)V",
+  "m|0011|equals|(Ljava/lang/Object;)Z",
+  "m|0011|hashCode|()I",
+  "m|0011|toString|()Ljava/lang/String;"
+ ],
+ "com.zhongbai233.net_music_can_play_bili.client.media.MediaSourceClassifier$Classification": [
+  "f|0012|allowed|Z",
+  "f|0012|kind|Lcom/zhongbai233/net_music_can_play_bili/client/media/SourceKind;",
+  "f|0012|normalized|Ljava/lang/String;",
+  "f|0012|path|Ljava/lang/String;",
+  "f|0012|reason|Ljava/lang/String;",
+  "m|0001|<init>|(Lcom/zhongbai233/net_music_can_play_bili/client/media/SourceKind;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;)V",
+  "m|0001|allowed|()Z",
+  "m|0001|kind|()Lcom/zhongbai233/net_music_can_play_bili/client/media/SourceKind;",
+  "m|0001|normalized|()Ljava/lang/String;",
+  "m|0001|path|()Ljava/lang/String;",
+  "m|0001|reason|()Ljava/lang/String;",
+  "m|0001|summary|()Ljava/lang/String;",
+  "m|0011|equals|(Ljava/lang/Object;)Z",
+  "m|0011|hashCode|()I",
+  "m|0011|toString|()Ljava/lang/String;"
+ ],
+ "com.zhongbai233.net_music_can_play_bili.client.media.SourceKind": [
+  "f|101a|$VALUES|[Lcom/zhongbai233/net_music_can_play_bili/client/media/SourceKind;",
+  "f|4019|HTTP|Lcom/zhongbai233/net_music_can_play_bili/client/media/SourceKind;",
+  "f|4019|LOCAL_IMAGE|Lcom/zhongbai233/net_music_can_play_bili/client/media/SourceKind;",
+  "f|4019|LOCAL_OTHER|Lcom/zhongbai233/net_music_can_play_bili/client/media/SourceKind;",
+  "f|4019|LOCAL_VIDEO|Lcom/zhongbai233/net_music_can_play_bili/client/media/SourceKind;",
+  "f|4019|UNSUPPORTED|Lcom/zhongbai233/net_music_can_play_bili/client/media/SourceKind;",
+  "m|0001|isLocal|()Z",
+  "m|0002|<init>|(Ljava/lang/String;I)V",
+  "m|0008|<clinit>|()V",
+  "m|0009|valueOf|(Ljava/lang/String;)Lcom/zhongbai233/net_music_can_play_bili/client/media/SourceKind;",
+  "m|0009|values|()[Lcom/zhongbai233/net_music_can_play_bili/client/media/SourceKind;",
+  "m|100a|$values|ret:[Lcom/zhongbai233/net_music_can_play_bili/client/media/SourceKind;"
+ ]
+}
