@@ -375,10 +375,17 @@ def check_members(base, built, focus):
                     n, k, bmap[k][1], umap[k][1]))
     top_b = len([n for n in base if '$' not in n])
     top_u = len([n for n in built if '$' not in n])
-    return {'status': 'pass' if not diffs else 'fail',
+    # 已登记的有意分歧**逐条**放行：不计入失败，但完整列出并计数（见 INTENTIONAL_FIX_DIFFS）
+    intentional = [d for d in diffs if d in INTENTIONAL_FIX_DIFFS]
+    kept = [d for d in diffs if d not in INTENTIONAL_FIX_DIFFS]
+    unmatched = sorted(INTENTIONAL_FIX_DIFFS - set(diffs))
+    return {'status': 'pass' if not kept else 'fail',
             'baseline_count': top_b, 'built_count': top_u,
             'classes_compared': len(names),
-            'diffs': diff_sort(diffs, focus),
+            'diffs': diff_sort(kept, focus),
+            'intentional_diffs': diff_sort(intentional, focus),
+            'intentional_classes': sorted({d.split(':', 1)[0] for d in intentional}),
+            'intentional_unmatched': unmatched,
             'whitelist_hits': sorted(set(hits)),
             'informational_diffs': info,
             'informational_note': 'ACC_SYNTHETIC 成员（javac 生成的 lambda 体）的参数顺序/擦除类型差异，'
@@ -398,6 +405,50 @@ EXPLAINED_ENV_NOTE = ('MenuType$MenuSupplier 元数差异：基线 jar 编译环
                       '(int, Inventory, RegistryFriendlyByteBuf)，本机 NeoForge 21.1.252 为两参 '
                       '(int, Inventory)；构造器引用按目标接口选构造器，故基线指向三参构造器、'
                       '产物指向两参构造器。两边源码相同，产物与 21.1.252 一致。')
+
+# ---------------------------------------------------------------- 已登记的有意分歧
+# main 分支的契约是「源码与原 jar 逐成员一致」。修复分支上被改动的类必然出现成员差异，
+# 因此按「类 → 原因」逐条登记：命中清单的差异不计入失败，但会在报告里**完整列出并计数**
+# （不隐藏），并且报告里同时写明本清单只解释了这些类，清单之外任何一条差异仍然判失败。
+# 当前清单对应 fix/iris-yuv-and-local-media 的 Patch A + Patch B。
+INTENTIONAL_FIX_CLASSES = {
+    'com.zhongbai233.net_music_can_play_bili.client.renderer.video.IrisShaderpackCompat':
+        'Patch A：移除 isForceYuvShaderEnabled()，shouldApplyIrisYuvCompatibility() 改为'
+        '「光影生效且正在使用自定义 YUV 着色器」，shouldDisableCustomYuvShader() 改读三态策略，'
+        '状态变化日志追加 yuvMode 字段',
+    'com.zhongbai233.net_music_can_play_bili.client.renderer.video.IrisShaderpackProperties':
+        'Patch A：新增 ncpb.video.iris.yuv_mode（auto/always/never，默认 auto）与 YUV_MODE* 常量、'
+        'yuvMode()/explicitCustomYuvShaderDisabled()/customYuvShaderDisabledWhen()/explicitBoolean()，'
+        '移除旧的 forceYuvShaderEnabled() 与 customYuvShaderDisabled() 两个布尔访问器',
+}
+INTENTIONAL_FIX_NOTE = ('fix/iris-yuv-and-local-media 的 Patch A（光影下默认让位给 NV12→RGBA 回退）'
+                        '与 Patch B（IRIS 警告占位图只在真走 YUV 通路时提交、且不再向镜头方向前压）')
+# 同一补丁里**只改了方法体/字面量**的类（成员签名不变，故 ③b 看不到差异，列此备案）：
+INTENTIONAL_FIX_BODY_ONLY = {
+    'com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoPlaybackPresentation':
+        'Patch B：shouldShowIrisWarning() 追加 isCustomYuvShaderAvailable() 前置条件',
+    'com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoPipelineProperties':
+        'Patch B：iris_warning_placeholder_view_depth_offset 默认值 0.03 → 0.0',
+}
+
+# 有意分歧是**逐条**登记的，不是按类放行：清单命中的这一条差异不计入失败，
+# 但同一批类里任何**其它**差异（例如后续在 IrisShaderpackProperties 上多删/多加一个成员，
+# 或者手误把成员访问标志改掉）依然会判失败。改这几个类就必须同步更新本清单 —— 这是刻意的。
+_IFC = 'com.zhongbai233.net_music_can_play_bili.client.renderer.video.IrisShaderpackCompat'
+_IFP = 'com.zhongbai233.net_music_can_play_bili.client.renderer.video.IrisShaderpackProperties'
+INTENTIONAL_FIX_DIFFS = {
+    _IFC + ': 缺少成员 m|0008|isForceYuvShaderEnabled|()Z',
+    _IFP + ': 缺少成员 m|0008|forceYuvShaderEnabled|()Z',
+    _IFP + ': 缺少成员 m|0008|customYuvShaderDisabled|()Z',
+    _IFP + ': 多出成员 f|0018|YUV_MODE|Ljava/lang/String;',
+    _IFP + ': 多出成员 f|0018|YUV_MODE_AUTO|Ljava/lang/String;',
+    _IFP + ': 多出成员 f|0018|YUV_MODE_ALWAYS|Ljava/lang/String;',
+    _IFP + ': 多出成员 f|0018|YUV_MODE_NEVER|Ljava/lang/String;',
+    _IFP + ': 多出成员 m|0008|yuvMode|()Ljava/lang/String;',
+    _IFP + ': 多出成员 m|0008|explicitCustomYuvShaderDisabled|()Ljava/lang/Boolean;',
+    _IFP + ': 多出成员 m|0008|customYuvShaderDisabledWhen|(Z)Z',
+    _IFP + ': 多出成员 m|000a|explicitBoolean|(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Boolean;',
+}
 
 
 def _strip_rfbb(text):
@@ -567,6 +618,13 @@ def main():
     if c_b['informational_diffs']:
         print('      不计入判定的合成成员差异: %d 条（见 JSON 的 informational_diffs）'
               % len(c_b['informational_diffs']))
+    if c_b.get('intentional_diffs'):
+        print('      已登记的有意分歧: %d 条 / %d 个类 —— %s'
+              % (len(c_b['intentional_diffs']), len(c_b['intentional_classes']), INTENTIONAL_FIX_NOTE))
+        for name in c_b['intentional_classes']:
+            print('        · %s ← %s' % (name.split('.')[-1], INTENTIONAL_FIX_CLASSES.get(name, '')))
+        print('        只改方法体/字面量、签名不变的备案类: %s'
+              % ', '.join(sorted(k.split('.')[-1] for k in INTENTIONAL_FIX_BODY_ONLY)))
     print('[③c] 资源字节  : %d vs %d, 差异 %d %s'
           % (c_c['baseline_count'], c_c['built_count'], len(c_c['diffs']), mark(c_c)))
     print('[③d] indy 调用点: %d vs %d 条 BootstrapMethods, 差异 %d %s'
@@ -588,6 +646,13 @@ def main():
             if len(d) > MAX_PRINT:
                 print('   … 还有 %d 条' % (len(d) - MAX_PRINT))
 
+    if c_b.get('intentional_diffs'):
+        print('\n--- ③b 已登记的有意分歧（清单之外任何差异仍判失败）---')
+        for line in c_b['intentional_diffs'][:MAX_PRINT]:
+            print('   ' + line.replace('\n', '\n   '))
+        if len(c_b['intentional_diffs']) > MAX_PRINT:
+            print('   … 还有 %d 条' % (len(c_b['intentional_diffs']) - MAX_PRINT))
+
     if errs:
         print('\n（javap 有 stderr 输出，首行：%s）' % errs[0][:120])
 
@@ -596,6 +661,10 @@ def main():
                           'informational_diffs': (len(c_b['informational_diffs'])
                                                   + len(c_d.get('informational_diffs', []))),
                           'explained_env_diffs': len(c_d.get('explained_env_diffs', [])),
+                          'intentional_fix_diffs': len(c_b.get('intentional_diffs', [])),
+                          'intentional_fix_classes': c_b.get('intentional_classes', []),
+                          'intentional_fix_note': INTENTIONAL_FIX_NOTE,
+                          'intentional_fix_body_only': sorted(INTENTIONAL_FIX_BODY_ONLY),
                           'baseline_jar': jar, 'built_classes': classes, 'built_jar': built_jar,
                           'javap_dumps': {'baseline': base_dump, 'built': built_dump}},
               'checks': checks}

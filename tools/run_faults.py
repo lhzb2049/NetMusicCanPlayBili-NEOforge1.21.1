@@ -354,6 +354,11 @@ def main():
     target_class = find_class_for_injection(classes)
     boot_class, _h = find_bootstrap_target(classes)
     lambda_class = find_lambda_target(classes)
+    # 已登记有意分歧清单（verify_src.INTENTIONAL_FIX_DIFFS）里的类：用来证明「逐条放行」
+    # 不等于「按类放行」—— 在这个类内部制造一条清单之外的新差异，门禁必须照样报错。
+    allowlisted_class = os.path.join(
+        classes, 'com', 'zhongbai233', 'net_music_can_play_bili',
+        'client', 'renderer', 'video', 'IrisShaderpackProperties.class')
     os.makedirs(FAULTS_DIR, exist_ok=True)
 
     def simple(p):
@@ -367,6 +372,8 @@ def main():
     print('  注入靶子 : %s' % os.path.relpath(target_class, classes))
     print('  ③d 靶子  : %s' % (os.path.relpath(boot_class, classes) if boot_class else '<未找到>'))
     print('  合成靶子 : %s' % (os.path.relpath(lambda_class, classes) if lambda_class else '<未找到>'))
+    print('  清单内靶子: %s' % (os.path.relpath(allowlisted_class, classes)
+                              if os.path.isfile(allowlisted_class) else '<未找到>'))
     print('=' * 78)
 
     groups = [
@@ -380,6 +387,8 @@ def main():
          '重定向 invokedynamic 的引导方法句柄'),
         ('F', 'member_signatures', lambda_class, inject_lambda_return_type, simple(lambda_class),
          '改合成 lambda 的返回类型 V -> I'),
+        ('G', 'member_signatures', allowlisted_class, inject_descriptor, simple(allowlisted_class),
+         '在「已登记有意分歧」的类内部制造清单外新差异'),
     ]
 
     results = []

@@ -13,10 +13,6 @@ public final class IrisShaderpackCompat {
    private IrisShaderpackCompat() {
    }
 
-   static boolean isForceYuvShaderEnabled() {
-      return IrisShaderpackProperties.forceYuvShaderEnabled();
-   }
-
    static String configuredYuvProgramName() {
       return IrisShaderpackProperties.yuvProgramName();
    }
@@ -50,7 +46,7 @@ public final class IrisShaderpackCompat {
    }
 
    static boolean shouldApplyIrisYuvCompatibility() {
-      return isForceYuvShaderEnabled() && isShaderPackInUse();
+      return isShaderPackInUse() && VideoBillboardGeometrySupport.isCustomYuvShaderAvailable();
    }
 
    static boolean shouldUseSingleSamplerProbe() {
@@ -62,11 +58,8 @@ public final class IrisShaderpackCompat {
    }
 
    static boolean shouldDisableCustomYuvShader() {
-      if (IrisShaderpackProperties.customYuvShaderDisabled()) {
-         return true;
-      } else {
-         return isForceYuvShaderEnabled() ? false : isShaderPackInUse();
-      }
+      Boolean explicit = IrisShaderpackProperties.explicitCustomYuvShaderDisabled();
+      return explicit != null ? explicit : isShaderPackInUse();
    }
 
    public static boolean isShaderPackInUse() {
@@ -86,9 +79,10 @@ public final class IrisShaderpackCompat {
             if (inUse != lastShaderPackInUse) {
                lastShaderPackInUse = inUse;
                LOGGER.info(
-                  "Iris shaderpack 状态变化: shaderpackInUse={}, customYuvShaderDisabled={}",
+                  "Iris shaderpack 状态变化: shaderpackInUse={}, customYuvShaderDisabled={}, yuvMode={}",
                   inUse,
-                  IrisShaderpackProperties.customYuvShaderDisabled() || !isForceYuvShaderEnabled() && inUse
+                  IrisShaderpackProperties.customYuvShaderDisabledWhen(inUse),
+                  IrisShaderpackProperties.yuvMode()
                );
             }
 

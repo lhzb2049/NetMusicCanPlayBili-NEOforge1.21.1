@@ -257,7 +257,10 @@ final class VideoPlaybackPresentation {
    }
 
    private boolean shouldShowIrisWarning() {
-      return this.owner.hasFrame && this.owner.textures.hasYuvTexture() && IrisShaderpackCompat.shouldApplyIrisYuvCompatibility();
+      return this.owner.hasFrame
+         && this.owner.textures.hasYuvTexture()
+         && VideoBillboardPreview.isCustomYuvShaderAvailable()
+         && IrisShaderpackCompat.shouldApplyIrisYuvCompatibility();
    }
 
    boolean isWithinAudioRange(Minecraft minecraft) {

@@ -115,7 +115,7 @@ public final class VideoPipelineProperties {
       return new VideoPipelineProperties.Presentation(
          NcpbSystemProperties.intValue("ncpb.video.pipeline.max_source_width", 4096),
          NcpbSystemProperties.intValue("ncpb.video.pipeline.max_source_height", 2304),
-         NcpbSystemProperties.doubleValue("ncpb.video.pipeline.iris_warning_placeholder_view_depth_offset", 0.03),
+         NcpbSystemProperties.doubleValue("ncpb.video.pipeline.iris_warning_placeholder_view_depth_offset", 0.0),
          NcpbSystemProperties.floatValue("ncpb.video.pipeline.iris_warning_placeholder_local_depth_offset", -0.01F),
          NcpbSystemProperties.intValue("ncpb.video.pipeline.queue_capacity", 3)
       );
