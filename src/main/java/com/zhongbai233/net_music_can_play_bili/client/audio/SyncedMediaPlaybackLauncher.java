@@ -6,6 +6,7 @@ import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliPlaybackDiagnostics;
 import com.zhongbai233.net_music_can_play_bili.bili.HttpAudioStreamHandler;
 import com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryProtection;
+import com.zhongbai233.net_music_can_play_bili.client.media.LocalVideoSources;
 import com.zhongbai233.net_music_can_play_bili.client.media.MediaLogThrottle;
 import com.zhongbai233.net_music_can_play_bili.client.media.MediaSourceClassifier;
 import com.zhongbai233.net_music_can_play_bili.media.sync.MediaRequestToken;
@@ -93,12 +94,16 @@ public final class SyncedMediaPlaybackLauncher {
             return null;
          } else {
             LyricRecord lyricRecord = prepared != null ? prepared.lyricRecord() : null;
+            // 阶段 2：本地视频的时长由重封装测得；服务端同步时长为 0 时用它兜底，起播找齐才能算对
+            long effectiveTotalMillis = totalMillis > 0L
+               ? Math.max(0L, totalMillis)
+               : LocalVideoSources.knownDurationMillis(playUrl);
             PlaybackRequest playbackRequest = PlaybackRequest.now(
                playUrl,
                pos,
                sessionId,
                Math.max(0L, elapsedMillis),
-               Math.max(0L, totalMillis),
+               effectiveTotalMillis,
                ownerId,
                minecartAnchor != null ? minecartAnchor.entityUuid() : null
             );

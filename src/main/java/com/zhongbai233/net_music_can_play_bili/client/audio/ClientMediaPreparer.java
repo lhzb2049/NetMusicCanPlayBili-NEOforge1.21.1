@@ -7,6 +7,7 @@ import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliApiClient;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliAudioResolver;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliSubtitleLyricService;
+import com.zhongbai233.net_music_can_play_bili.client.media.LocalVideoSources;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPrepareProperties;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
 import com.zhongbai233.net_music_can_play_bili.util.concurrent.CancellableTaskFuture;
@@ -72,6 +73,14 @@ public final class ClientMediaPreparer {
    private static ClientMediaPreparer.AudioResolution resolveAudio(String rawUrl, String playUrl, String songName, boolean allowDolby) {
       String storedSelection = storedBiliSelection(rawUrl, playUrl);
       if (storedSelection == null) {
+         // 阶段 2：本地视频的音频走重封装出来的回环 fMP4 地址（本方法跑在音频准备线程上，可以等重封装）
+         LocalVideoSources.AudioRouting routing = LocalVideoSources.routeAudio(rawUrl, playUrl);
+         if (routing.handled()) {
+            return routing.audioAvailable()
+               ? new ClientMediaPreparer.AudioResolution(routing.url(), ClientMediaPreparer.AudioPresence.PRESENT)
+               : new ClientMediaPreparer.AudioResolution(playUrl, ClientMediaPreparer.AudioPresence.ABSENT);
+         }
+
          return new ClientMediaPreparer.AudioResolution(playUrl, ClientMediaPreparer.AudioPresence.PRESENT);
       } else {
          try {

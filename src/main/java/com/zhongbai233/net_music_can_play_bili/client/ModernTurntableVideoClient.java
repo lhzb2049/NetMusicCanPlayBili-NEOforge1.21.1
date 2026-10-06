@@ -7,6 +7,7 @@ import com.zhongbai233.net_music_can_play_bili.blockentity.LiveStreamerBlockEnti
 import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackTracker;
+import com.zhongbai233.net_music_can_play_bili.client.media.LocalVideoSources;
 import com.zhongbai233.net_music_can_play_bili.client.media.MediaLogThrottle;
 import com.zhongbai233.net_music_can_play_bili.client.media.MediaSourceClassifier;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
@@ -98,6 +99,7 @@ public final class ModernTurntableVideoClient {
       CONTROL_CONSOLE_QUALITY.clear();
       STALE_RESOLVE_DROPS.set(0L);
       NO_CONSUMER_RESOLVE_DROPS.set(0L);
+      LocalVideoSources.clearAll();
    }
 
    public static void registerControlConsoleConsumer(BlockPos turntablePos, BlockPos consolePos, int qualityCeiling) {
@@ -196,7 +198,8 @@ public final class ModernTurntableVideoClient {
          if (playbackSessionId != null) {
             String cleanRawUrl = PlaybackSync.strip(rawUrl);
             BiliApiClient.VideoSelection selection = BiliVideoStreamResolver.selectionOrNull(cleanRawUrl);
-            if (selection == null) {
+            boolean localVideo = selection == null && LocalVideoSources.isLocalVideoSource(cleanRawUrl);
+            if (selection == null && !localVideo) {
                // 本方法是每帧执行的（ControlConsoleRenderer 两个调用点 + VideoProjectorRenderer）：
                // 同一串地址只在判定结果变化时打一条，避免 60~120 条/秒刷屏
                MediaSourceClassifier.Classification source = MediaSourceClassifier.classifyThrottled(
@@ -489,7 +492,7 @@ public final class ModernTurntableVideoClient {
                               qualityCeiling,
                               projectorPositions.size(),
                               requestGeneration.value(),
-                              "async B站 video stream resolve with quality ceiling"
+                              "async video stream resolve with quality ceiling"
                            );
                            CancellableTaskFuture<Void> resolveTask = CancellableTaskFuture.submit(VIDEO_RESOLVE_EXECUTOR, () -> {
                               startResolved(cleanRawUrl, selection, turntablePos, consumerPositions, qualityCeiling, sync, requestNanoTime, requestGeneration);
@@ -677,7 +680,10 @@ public final class ModernTurntableVideoClient {
       PlaybackSessionId playbackSessionId = sync.playbackSessionId().orElse(null);
       if (playbackSessionId != null) {
          try {
-            BiliVideoStreamResolver.ResolvedVideoStream stream = BiliVideoStreamResolver.resolve(cleanRawUrl, qualityCeiling, DEFAULT_FPS);
+            // selection 为空即「本地视频」：走阶段 2 的本地重封装 + 回环 http 源，其余流程完全一致
+            BiliVideoStreamResolver.ResolvedVideoStream stream = selection != null
+               ? BiliVideoStreamResolver.resolve(cleanRawUrl, qualityCeiling, DEFAULT_FPS)
+               : LocalVideoSources.resolveLocalStream(cleanRawUrl, 0L);
             int sourceWidth = stream.sourceWidth();
             int sourceHeight = stream.sourceHeight();
             int fps = stream.fps();
@@ -692,6 +698,10 @@ public final class ModernTurntableVideoClient {
                         ACTIVE_QUALITY_CEILING_BY_SESSION.put(playbackSessionId, qualityCeiling);
                         PlaybackSync.Metadata launchSync = currentPlaybackMetadata(turntablePos, sync);
                         long elapsedMillis = normalizedElapsedMillis(launchSync);
+                        // 本地视频：服务端没有同步时长时，用重封装测得的真实时长兜底
+                        long totalMillis = launchSync.totalMillis() > 0L
+                           ? launchSync.totalMillis()
+                           : LocalVideoSources.knownDurationMillis(stream.url());
                         logDecision(
                            sync.sessionId(),
                            "resolved-start",
@@ -722,7 +732,7 @@ public final class ModernTurntableVideoClient {
                            fps,
                            launchSync.sessionId(),
                            elapsedMillis,
-                           launchSync.totalMillis(),
+                           totalMillis,
                            consumers.positions(),
                            turntablePos,
                            PREFER_NATIVE,
@@ -745,7 +755,7 @@ public final class ModernTurntableVideoClient {
                   dropResolvedResult(sync.sessionId(), requestGeneration, turntablePos, decision);
                }
             });
-            throw new IllegalStateException("resolve B站 video stream failed", var14);
+            throw new IllegalStateException("resolve video stream failed", var14);
          }
       }
    }

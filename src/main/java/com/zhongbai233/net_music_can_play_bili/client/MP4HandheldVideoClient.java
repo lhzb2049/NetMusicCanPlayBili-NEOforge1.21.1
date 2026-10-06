@@ -5,6 +5,7 @@ import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.PadDiagnosticsProperties;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver;
 import com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryProtection;
+import com.zhongbai233.net_music_can_play_bili.client.media.LocalVideoSources;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.item.MP4ItemScreenRenderer;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadItemScreenRenderer;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoCloseDiagnostics;
@@ -522,7 +523,10 @@ public final class MP4HandheldVideoClient {
 
    private static BiliVideoStreamResolver.ResolvedVideoStream resolveStream(HandheldMediaPlayback playback, int qualityCeiling) {
       try {
-         return BiliVideoStreamResolver.resolveWithSubtitle(playback.rawUrl(), qualityCeiling, playback.title(), playback.allowAiSubtitle());
+         // 阶段 2：本地视频直接给出重封装后的回环地址（本方法跑在 mp4-handheld-video 线程上，可以等重封装）
+         return LocalVideoSources.isLocalVideoSource(playback.rawUrl())
+            ? LocalVideoSources.resolveLocalStream(playback.rawUrl(), 0L)
+            : BiliVideoStreamResolver.resolveWithSubtitle(playback.rawUrl(), qualityCeiling, playback.title(), playback.allowAiSubtitle());
       } catch (Exception var3) {
          throw new IllegalStateException(var3);
       }

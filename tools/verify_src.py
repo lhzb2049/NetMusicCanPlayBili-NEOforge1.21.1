@@ -435,8 +435,9 @@ INTENTIONAL_FIX_CLASSES = {
         'yuvMode()/explicitCustomYuvShaderDisabled()/customYuvShaderDisabledWhen()/explicitBoolean()，'
         '移除旧的 forceYuvShaderEnabled() 与 customYuvShaderDisabled() 两个布尔访问器',
 }
-INTENTIONAL_FIX_NOTE = ('fix/iris-yuv-and-local-media 的 Patch A（光影下默认让位给 NV12→RGBA 回退）'
-                        '与 Patch B（IRIS 警告占位图只在真走 YUV 通路时提交、且不再向镜头方向前压）')
+INTENTIONAL_FIX_NOTE = ('fix/iris-yuv-and-local-media 的 Patch A（光影下默认让位给 NV12→RGBA 回退）、'
+                        'Patch B（IRIS 警告占位图只在真走 YUV 通路时提交、且不再向镜头方向前压）、'
+                        '阶段 0/1/2 的本地媒体通路（识别层、本地图片、本地视频重封装 + 回环 http 源）')
 # 同一补丁里**只改了方法体/字面量**的类（成员签名不变，故 ③b 看不到差异，列此备案）：
 INTENTIONAL_FIX_BODY_ONLY = {
     'com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoPlaybackPresentation':
@@ -445,6 +446,20 @@ INTENTIONAL_FIX_BODY_ONLY = {
         'Patch B：iris_warning_placeholder_view_depth_offset 默认值 0.03 → 0.0',
     'com.zhongbai233.net_music_can_play_bili.client.renderer.VideoProjectorRenderer':
         '阶段 1：extract() 增加本地图片分支（与播放状态无关），getRenderBoundingBox() 优先用图片帧的宽高比',
+    'com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient':
+        '阶段 0：跳过日志去重（键 "turntable-video-source|" + rawUrl）；'
+        '阶段 2：selection 为空且判定为本地视频时改走 LocalVideoSources.resolveLocalStream()，'
+        '时长用重封装测得值兜底，启动日志去掉「B站」字样，clear() 追加 LocalVideoSources.clearAll()',
+    'com.zhongbai233.net_music_can_play_bili.client.audio.ModernTurntablePlaybackCoordinator':
+        '阶段 0：拒绝日志去重（键 "turntable-audio-non-http|" + playUrl）',
+    'com.zhongbai233.net_music_can_play_bili.client.audio.SyncedMediaPlaybackLauncher':
+        '阶段 0：拒绝日志去重（键 "audio-non-http|" + playUrl）；'
+        '阶段 2：PlaybackRequest 的 totalMillis 在服务端未同步时用本地重封装时长兜底',
+    'com.zhongbai233.net_music_can_play_bili.client.audio.ClientMediaPreparer':
+        '阶段 2：resolveAudio() 在非 B 站直链分支先问 LocalVideoSources.routeAudio()，'
+        '本地视频改用回环音频 fMP4 地址；源里没有可用音频时按 ABSENT 上报（纯视频正常播放）',
+    'com.zhongbai233.net_music_can_play_bili.client.MP4HandheldVideoClient':
+        '阶段 2：resolveStream() 对本地视频改走 LocalVideoSources.resolveLocalStream()（手持设备与唱片机同源）',
 }
 
 # 有意分歧是**逐条**登记的，不是按类放行：清单命中的这一条差异不计入失败，
@@ -483,6 +498,23 @@ INTENTIONAL_FIX_NEW_CLASSES = {
         '阶段 1：本地图片 → 投影仪（动态纹理 + 静态帧，纹理加载排在客户端线程队列）',
     'com.zhongbai233.net_music_can_play_bili.client.media.LocalImageHeaderProbe':
         '阶段 1：PNG/JPEG 文件头宽高解析（解码前的像素规模保护）',
+    # --- 阶段 2（本地视频：progressive MP4 → 单轨 fMP4 + 回环 http 源）---
+    'com.zhongbai233.net_music_can_play_bili.media.local.Mp4BoxReader':
+        '阶段 2：byte[] 上的 MP4 盒遍历（读/写两侧共用，纯逻辑）',
+    'com.zhongbai233.net_music_can_play_bili.media.local.Mp4TrackIndex':
+        '阶段 2：一条轨的样本表中间表示（偏移/字节数/时长/CTS/关键帧 + stsd 原样字节）',
+    'com.zhongbai233.net_music_can_play_bili.media.local.ProgressiveMp4Index':
+        '阶段 2：progressive MP4 的 moov/stbl 解析（只把 moov 读进内存，拒绝加密/缺表/越界样本）',
+    'com.zhongbai233.net_music_can_play_bili.media.local.Fmp4TrackWriter':
+        '阶段 2：单轨 fMP4 写入（ftyp/moov/空样本表 + 关键帧对齐分片 + sidx 回填）',
+    'com.zhongbai233.net_music_can_play_bili.media.local.LocalVideoRemuxer':
+        '阶段 2：一次调用产出「视频单轨 + 音频单轨」两个 fMP4（样本字节原样搬运，不重编码）',
+    'com.zhongbai233.net_music_can_play_bili.media.stream.LocalMediaHttpServer':
+        '阶段 2：只绑 127.0.0.1 的极小 HTTP/1.1 文件服务（token + Range/206/416），把本地文件变成真 http 源',
+    'com.zhongbai233.net_music_can_play_bili.client.media.LocalVideoProperties':
+        '阶段 2：本地视频开关与上限（ncpb.local.video.*）',
+    'com.zhongbai233.net_music_can_play_bili.client.media.LocalVideoSources':
+        '阶段 2：本地视频入口（分类 → 白名单 → 重封装去重 → 回环发布 → 登记 segment base → 缓存与回收）',
 }
 # --- 阶段 0 的接线只改方法体，但新增字符串拼接 → 新增 indy（makeConcatWithConstants）调用点 ---
 # ③d 按「类 → (基线条数, 产物条数)」登记：条数对不上仍然判失败（比按类放行更强）。

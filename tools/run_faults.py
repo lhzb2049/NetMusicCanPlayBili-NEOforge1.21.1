@@ -364,6 +364,10 @@ def main():
     new_class_target = os.path.join(
         classes, 'com', 'zhongbai233', 'net_music_can_play_bili',
         'client', 'media', 'MediaSourceClassifier.class')
+    # 阶段 2 登记为「有意新增」的类：证明清单机制跟着清单一起长大（新类同样逐成员校验）。
+    stage2_class_target = os.path.join(
+        classes, 'com', 'zhongbai233', 'net_music_can_play_bili',
+        'media', 'local', 'LocalVideoRemuxer.class')
     os.makedirs(FAULTS_DIR, exist_ok=True)
 
     def simple(p):
@@ -381,6 +385,8 @@ def main():
                               if os.path.isfile(allowlisted_class) else '<未找到>'))
     print('  新增类靶子: %s' % (os.path.relpath(new_class_target, classes)
                               if os.path.isfile(new_class_target) else '<未找到>'))
+    print('  阶段2靶子 : %s' % (os.path.relpath(stage2_class_target, classes)
+                              if os.path.isfile(stage2_class_target) else '<未找到>'))
     print('=' * 78)
 
     groups = [
@@ -398,6 +404,8 @@ def main():
          '在「已登记有意分歧」的类内部制造清单外新差异'),
         ('H', 'member_signatures', new_class_target, inject_descriptor, simple(new_class_target),
          '在「有意新增」的类内部制造成员差异'),
+        ('I', 'member_signatures', stage2_class_target, inject_descriptor, simple(stage2_class_target),
+         '在阶段 2 新增的类内部制造成员差异（清单机制跟着清单一起长大）'),
     ]
 
     results = []
