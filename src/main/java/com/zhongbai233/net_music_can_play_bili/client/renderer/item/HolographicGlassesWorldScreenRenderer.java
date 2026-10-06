@@ -3,8 +3,11 @@ package com.zhongbai233.net_music_can_play_bili.client.renderer.item;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.blaze3d.vertex.PoseStack.Pose;
+import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.HolographicGlassesClient;
 import com.zhongbai233.net_music_can_play_bili.client.MP4HandheldVideoClient;
+import com.zhongbai233.net_music_can_play_bili.client.media.ClientLocalImageProjection;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.ClientDisplayProperties;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.RenderVertexUtils;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.IrisShaderpackCompat;
@@ -22,6 +25,7 @@ import java.util.UUID;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.RenderType;
+import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
@@ -87,7 +91,8 @@ public final class HolographicGlassesWorldScreenRenderer {
       if (deviceId != null) {
          MP4HandheldVideoClient.markVisible(deviceId);
          PoseStack poseStack = new PoseStack();
-         if (rgbaFallback) {
+         // 本地图片是 RGBA 静态帧：必须走 RGBA 图层，NV12 图层拿不到画面
+         if (rgbaFallback || MP4HandheldVideoClient.hasStaticImage(deviceId)) {
             MP4RgbaVideoLayer rgbaLayer = MP4RgbaVideoLayer.forHandheldDevice(deviceId);
             if (!rgbaLayer.uploadLatest(deviceId)) {
                return;
@@ -114,15 +119,51 @@ public final class HolographicGlassesWorldScreenRenderer {
    private static void submitProjector(
       PortSubmitNodeCollector collector, MediaBindingData.MediaSource source, HolographicGlassesWorldScreenRenderer.ScreenQuad quad, boolean rgbaFallback
    ) {
-      VideoBillboardState.ProjectorFrameSnapshot frame = VideoBillboardPreview.currentProjectorFrame(source.pos());
+      syncLocalImage(source);
+      VideoBillboardState.ProjectorFrameSnapshot image = ClientLocalImageProjection.frameForConsumer(source.pos());
+      VideoBillboardState.ProjectorFrameSnapshot frame = image != null
+         ? image
+         : VideoBillboardPreview.currentProjectorFrame(source.pos());
       submitFrame(collector, frame, quad, rgbaFallback);
    }
 
    private static void submitTurntable(
       PortSubmitNodeCollector collector, MediaBindingData.MediaSource source, HolographicGlassesWorldScreenRenderer.ScreenQuad quad, boolean rgbaFallback
    ) {
-      VideoBillboardState.ProjectorFrameSnapshot frame = VideoBillboardPreview.currentTurntableFrame(source.pos());
+      syncLocalImage(source);
+      VideoBillboardState.ProjectorFrameSnapshot image = ClientLocalImageProjection.frameForConsumer(source.pos());
+      VideoBillboardState.ProjectorFrameSnapshot frame = image != null
+         ? image
+         : VideoBillboardPreview.currentTurntableFrame(source.pos());
       submitFrame(collector, frame, quad, rgbaFallback);
+   }
+
+   /**
+    * 阶段 3：全息眼镜绑定的投影仪/唱片机若放的是本地图片，按「消费端位置」登记静态画面。
+    *
+    * <p>眼镜自己同步（而不是等方块实体的 BER 顺带同步）：玩家背对投影仪/中控台时 BER 可能不跑，
+    * 但眼镜里的画面仍然应该是对的。
+    */
+   private static void syncLocalImage(MediaBindingData.MediaSource source) {
+      Minecraft minecraft = Minecraft.getInstance();
+      if (source == null || source.pos() == null || minecraft.level == null) {
+         return;
+      }
+
+      if (source.isTurntable()) {
+         if (minecraft.level.getBlockEntity(source.pos()) instanceof ModernTurntableBlockEntity turntable) {
+            ClientLocalImageProjection.syncFromTurntable(turntable, source.pos());
+         }
+
+         return;
+      }
+
+      if (source.isProjector() && minecraft.level.getBlockEntity(source.pos()) instanceof VideoProjectorBlockEntity projector) {
+         BlockPos turntablePos = projector.getLinkedTurntablePos();
+         if (turntablePos != null && minecraft.level.getBlockEntity(turntablePos) instanceof ModernTurntableBlockEntity turntable) {
+            ClientLocalImageProjection.syncFromTurntable(turntable, source.pos());
+         }
+      }
    }
 
    private static void submitFrame(

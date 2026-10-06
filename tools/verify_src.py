@@ -437,7 +437,8 @@ INTENTIONAL_FIX_CLASSES = {
 }
 INTENTIONAL_FIX_NOTE = ('fix/iris-yuv-and-local-media 的 Patch A（光影下默认让位给 NV12→RGBA 回退）、'
                         'Patch B（IRIS 警告占位图只在真走 YUV 通路时提交、且不再向镜头方向前压）、'
-                        '阶段 0/1/2 的本地媒体通路（识别层、本地图片、本地视频重封装 + 回环 http 源）')
+                        '阶段 0/1/2/3 的本地媒体通路（识别层、本地图片、本地视频重封装 + 回环 http 源、'
+                        '中控台/全息眼镜/Pad/MP4 物品的本地图片与视频适配）')
 # 同一补丁里**只改了方法体/字面量**的类（成员签名不变，故 ③b 看不到差异，列此备案）：
 INTENTIONAL_FIX_BODY_ONLY = {
     'com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoPlaybackPresentation':
@@ -459,7 +460,38 @@ INTENTIONAL_FIX_BODY_ONLY = {
         '阶段 2：resolveAudio() 在非 B 站直链分支先问 LocalVideoSources.routeAudio()，'
         '本地视频改用回环音频 fMP4 地址；源里没有可用音频时按 ABSENT 上报（纯视频正常播放）',
     'com.zhongbai233.net_music_can_play_bili.client.MP4HandheldVideoClient':
-        '阶段 2：resolveStream() 对本地视频改走 LocalVideoSources.resolveLocalStream()（手持设备与唱片机同源）',
+        '阶段 2：resolveStream() 对本地视频改走 LocalVideoSources.resolveLocalStream()（手持设备与唱片机同源）；'
+        '阶段 3：准入改用 LocalMediaAdmission.videoExpected()，新增 hasStaticImage(UUID)，'
+        'latestFrame()/acquireLatestFrame()/frameSequence() 在没有解码帧时回落到本地图片静态帧',
+    'com.zhongbai233.net_music_can_play_bili.client.renderer.ControlConsoleRenderer':
+        '阶段 3：sourceSnapshot() 的 videoExpected 改走 LocalMediaAdmission.videoExpected()（本地视频/图片也算有画面）；'
+        'extract() 追加 syncLocalImageSource()，按中控台位置登记本地图片静态帧',
+    'com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview':
+        '阶段 3：currentControlConsoleVideo() 优先返回中控台位置的本地图片静态帧（海报式，与播放状态无关）',
+    'com.zhongbai233.net_music_can_play_bili.client.renderer.item.HolographicGlassesWorldScreenRenderer':
+        '阶段 3：submitProjector()/submitTurntable() 先同步并优先使用本地图片静态帧（不依赖方块实体 BER 是否在跑）；'
+        'submitMediaDevice() 在本地图片时强制走 RGBA 图层',
+    'com.zhongbai233.net_music_can_play_bili.client.renderer.item.MP4ItemScreenRenderer':
+        '阶段 3：横屏视频覆盖层的条件与图层选择接受「本地图片静态帧」（没有播放状态也显示）',
+    'com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadItemScreenRenderer':
+        '阶段 3：hasVideoFrame()/submitVideoLayer() 不再要求「正在播放」（本地图片是静态帧），RGBA 图层同理',
+    'com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadGuiViewState':
+        '阶段 3：hasVideoFrame 不再要求 hasPlayback（本地图片静态帧）',
+    'com.zhongbai233.net_music_can_play_bili.client.renderer.item.MP4GuiViewState':
+        '阶段 3：hasVideoFrame 允许「本地图片静态帧」在没有播放状态时也算有画面',
+    'com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlayback':
+        '阶段 3：videoPlayback() 在本地视频已重封装时用真实时长替换服务端同步的时长'
+        '（服务端对本地文件只知道唱片时长，否则设备「播一下就停」）',
+    'com.zhongbai233.net_music_can_play_bili.client.media.ClientLocalImageProjection':
+        '阶段 1：本地图片 → 投影仪；阶段 3：frameForProjector() 更名 frameForConsumer()（同一份映射同时服务'
+        '中控台屏幕与全息眼镜绑定的投影仪/唱片机位置），登记日志措辞改为「画面消费端」；'
+        '静态帧抽成 imageSnapshot() 并把 emissiveRgba 由 true 改为 false（原先走半透明渲染类型、不写深度，'
+        '开光影后天空的云会穿到图片前面）',
+    'com.zhongbai233.net_music_can_play_bili.client.renderer.item.MP4RgbaVideoLayer':
+        '阶段 3（修 bug）：设备屏 RGBA 帧打包把红蓝对调了（ABGR32.color(a,r,g,b) 的参数名顺序被误用），'
+        '改成算术写法 a<<24|b<<16|g<<8|r 并与投影仪通路同口径；顺带抽成 packPixel(IIII)I',
+    'com.zhongbai233.net_music_can_play_bili.client.media.LocalVideoSources':
+        '阶段 2：本地视频入口；阶段 3：新增 knownDurationMillisForPath()（手持设备时长兜底）',
 }
 
 # 有意分歧是**逐条**登记的，不是按类放行：清单命中的这一条差异不计入失败，
@@ -479,6 +511,19 @@ INTENTIONAL_FIX_DIFFS = {
     _IFP + ': 多出成员 m|0008|explicitCustomYuvShaderDisabled|()Ljava/lang/Boolean;',
     _IFP + ': 多出成员 m|0008|customYuvShaderDisabledWhen|(Z)Z',
     _IFP + ': 多出成员 m|000a|explicitBoolean|(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Boolean;',
+    # --- 阶段 3：四个消费端适配新增的成员（逐条登记，类里其它任何差异仍然判失败）---
+    'com.zhongbai233.net_music_can_play_bili.client.MP4HandheldVideoClient'
+        + ': 多出成员 m|0009|hasStaticImage|(Ljava/util/UUID;)Z',
+    'com.zhongbai233.net_music_can_play_bili.client.renderer.ControlConsoleRenderer'
+        + ': 多出成员 m|000a|syncLocalImageSource|(Lcom/zhongbai233/net_music_can_play_bili/blockentity/'
+        + 'ControlConsoleBlockEntity;Lcom/zhongbai233/net_music_can_play_bili/client/renderer/ControlConsoleRenderer$State;)V',
+    'com.zhongbai233.net_music_can_play_bili.client.renderer.item.HolographicGlassesWorldScreenRenderer'
+        + ': 多出成员 m|000a|syncLocalImage|(Lcom/zhongbai233/net_music_can_play_bili/link/MediaBindingData$MediaSource;)V',
+    # 设备屏 RGBA 打包：原先内联在 uploadPixels 里且红蓝对调，抽成方法并修正后逐条登记
+    'com.zhongbai233.net_music_can_play_bili.client.renderer.item.MP4RgbaVideoLayer'
+        + ': 多出成员 m|0008|packPixel|(IIII)I',
+    # 注：ClientLocalImageProjection 是阶段 1 登记的「有意新增类」，它的成员（含新增的 imageSnapshot）
+    # 由 tools/new_class_manifest.json 逐条校验，不在这里按类放行。
 }
 
 # --- 阶段 0（本地媒体源识别层）新增的类：③a/③b 会报「只在产物里存在」，按类登记 ---
@@ -515,6 +560,13 @@ INTENTIONAL_FIX_NEW_CLASSES = {
         '阶段 2：本地视频开关与上限（ncpb.local.video.*）',
     'com.zhongbai233.net_music_can_play_bili.client.media.LocalVideoSources':
         '阶段 2：本地视频入口（分类 → 白名单 → 重封装去重 → 回环发布 → 登记 segment base → 缓存与回收）',
+    # --- 阶段 3（中控台 / 全息眼镜 / Pad / MP4 物品的本地图片与视频适配）---
+    'com.zhongbai233.net_music_can_play_bili.client.media.LocalMediaAdmission':
+        '阶段 3：四个消费端共用的「这个源算不算有画面」判定（本地视频/本地图片都算，纯逻辑可离线验证）',
+    'com.zhongbai233.net_music_can_play_bili.client.media.LocalImageRgba':
+        '阶段 3：本地图片 → RGBA 字节（ImageIO 读头限规模 + LocalImageScaler 缩放，不依赖 Minecraft 类）',
+    'com.zhongbai233.net_music_can_play_bili.client.media.ClientLocalImageFrames':
+        '阶段 3：本地图片 → 设备屏静态帧（Pad / MP4 物品 / 全息眼镜设备绑定共用，帧序号固定只上传一次）',
 }
 # --- 阶段 0 的接线只改方法体，但新增字符串拼接 → 新增 indy（makeConcatWithConstants）调用点 ---
 # ③d 按「类 → (基线条数, 产物条数)」登记：条数对不上仍然判失败（比按类放行更强）。

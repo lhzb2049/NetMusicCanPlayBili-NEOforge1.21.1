@@ -8,6 +8,7 @@ import com.mojang.blaze3d.vertex.PoseStack.Pose;
 import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
 import com.zhongbai233.net_music_can_play_bili.client.HolographicGlassesClient;
 import com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryProtection;
+import com.zhongbai233.net_music_can_play_bili.client.media.ClientLocalImageProjection;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.ControlConsoleRenderer;
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.media.ControlConsoleVideoStatePolicy;
 import com.zhongbai233.net_music_can_play_bili.media.VideoSurfaceBrightness;
@@ -322,38 +323,46 @@ public final class VideoBillboardPreview extends VideoBillboardSessionSupport {
    public static VideoBillboardState.ControlConsoleVideoSnapshot currentControlConsoleVideo(BlockPos consolePos, boolean sourcePlaying, boolean videoExpected) {
       if (consolePos == null) {
          return null;
-      } else {
-         for (VideoPlaybackInstance instance : SESSION_INSTANCES.instances()) {
-            if (instance.containsProjector(consolePos)) {
-               boolean failed = instance.hasTerminalFailure();
-               VideoBillboardState.ProjectorFrameSnapshot realFrame = instance.realFrameSnapshot(consolePos);
-               ControlConsoleVideoStatePolicy.State state = ControlConsoleVideoStatePolicy.resolve(sourcePlaying, videoExpected, failed, realFrame.hasFrame());
+      }
 
-               VideoBillboardState.ProjectorFrameSnapshot displayFrame = switch (state) {
-                  case ACTIVE -> IrisShaderpackCompat.shouldApplyIrisYuvCompatibility() && realFrame.yuv()
-                     ? instance.displayFrameSnapshot(consolePos)
-                     : realFrame;
-                  case ERROR, BUFFERING, IDLE -> controlConsolePlaceholder(state);
-               };
-               return new VideoBillboardState.ControlConsoleVideoSnapshot(instance.sessionId(), state, displayFrame);
-            }
+      // 阶段 3：中控台屏幕上的本地图片（海报式静态画面，与播放状态无关），优先于视频会话
+      VideoBillboardState.ProjectorFrameSnapshot consoleImage = ClientLocalImageProjection.frameForConsumer(consolePos);
+      if (consoleImage != null) {
+         return new VideoBillboardState.ControlConsoleVideoSnapshot(
+            null, ControlConsoleVideoStatePolicy.State.ACTIVE, consoleImage
+         );
+      }
+
+      for (VideoPlaybackInstance instance : SESSION_INSTANCES.instances()) {
+         if (instance.containsProjector(consolePos)) {
+            boolean failed = instance.hasTerminalFailure();
+            VideoBillboardState.ProjectorFrameSnapshot realFrame = instance.realFrameSnapshot(consolePos);
+            ControlConsoleVideoStatePolicy.State state = ControlConsoleVideoStatePolicy.resolve(sourcePlaying, videoExpected, failed, realFrame.hasFrame());
+
+            VideoBillboardState.ProjectorFrameSnapshot displayFrame = switch (state) {
+               case ACTIVE -> IrisShaderpackCompat.shouldApplyIrisYuvCompatibility() && realFrame.yuv()
+                  ? instance.displayFrameSnapshot(consolePos)
+                  : realFrame;
+               case ERROR, BUFFERING, IDLE -> controlConsolePlaceholder(state);
+            };
+            return new VideoBillboardState.ControlConsoleVideoSnapshot(instance.sessionId(), state, displayFrame);
          }
+      }
 
-         PendingVideoSessionRegistry.Snapshot<BlockPos> failure = PENDING_SESSIONS.findByProjector(PendingVideoSessionRegistry.State.FAILURE, consolePos);
-         if (failure != null) {
-            ControlConsoleVideoStatePolicy.State state = ControlConsoleVideoStatePolicy.resolve(sourcePlaying, videoExpected, true, false);
+      PendingVideoSessionRegistry.Snapshot<BlockPos> failure = PENDING_SESSIONS.findByProjector(PendingVideoSessionRegistry.State.FAILURE, consolePos);
+      if (failure != null) {
+         ControlConsoleVideoStatePolicy.State state = ControlConsoleVideoStatePolicy.resolve(sourcePlaying, videoExpected, true, false);
+         VideoBillboardState.ProjectorFrameSnapshot frame = controlConsolePlaceholder(state);
+         return new VideoBillboardState.ControlConsoleVideoSnapshot(failure.sessionId(), state, frame);
+      } else {
+         PendingVideoSessionRegistry.Snapshot<BlockPos> loading = PENDING_SESSIONS.findByProjector(PendingVideoSessionRegistry.State.LOADING, consolePos);
+         if (loading != null) {
+            ControlConsoleVideoStatePolicy.State state = ControlConsoleVideoStatePolicy.resolve(sourcePlaying, videoExpected, false, false);
             VideoBillboardState.ProjectorFrameSnapshot frame = controlConsolePlaceholder(state);
-            return new VideoBillboardState.ControlConsoleVideoSnapshot(failure.sessionId(), state, frame);
+            return new VideoBillboardState.ControlConsoleVideoSnapshot(loading.sessionId(), state, frame);
          } else {
-            PendingVideoSessionRegistry.Snapshot<BlockPos> loading = PENDING_SESSIONS.findByProjector(PendingVideoSessionRegistry.State.LOADING, consolePos);
-            if (loading != null) {
-               ControlConsoleVideoStatePolicy.State state = ControlConsoleVideoStatePolicy.resolve(sourcePlaying, videoExpected, false, false);
-               VideoBillboardState.ProjectorFrameSnapshot frame = controlConsolePlaceholder(state);
-               return new VideoBillboardState.ControlConsoleVideoSnapshot(loading.sessionId(), state, frame);
-            } else {
-               ControlConsoleVideoStatePolicy.State state = ControlConsoleVideoStatePolicy.resolve(sourcePlaying, videoExpected, false, false);
-               return new VideoBillboardState.ControlConsoleVideoSnapshot(null, state, controlConsolePlaceholder(state));
-            }
+            ControlConsoleVideoStatePolicy.State state = ControlConsoleVideoStatePolicy.resolve(sourcePlaying, videoExpected, false, false);
+            return new VideoBillboardState.ControlConsoleVideoSnapshot(null, state, controlConsolePlaceholder(state));
          }
       }
    }

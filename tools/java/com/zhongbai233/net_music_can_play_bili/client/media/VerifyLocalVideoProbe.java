@@ -1,5 +1,7 @@
 package com.zhongbai233.net_music_can_play_bili.client.media;
 
+import com.zhongbai233.net_music_can_play_bili.client.renderer.item.VerifyHandheldRgbaProbe;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardState;
 import com.zhongbai233.net_music_can_play_bili.media.Fmp4ToMp4Converter;
 import com.zhongbai233.net_music_can_play_bili.media.codec.VerifyVideoConfigProbe;
 import com.zhongbai233.net_music_can_play_bili.media.local.Mp4BoxReader;
@@ -25,6 +27,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.util.FastColor.ABGR32;
 
 /**
  * 阶段 2（本地视频）的离线验收探针：所有检查都走**产品自己的**解析器/客户端，
@@ -65,11 +69,176 @@ public final class VerifyLocalVideoProbe {
          case "consumers" -> consumers(args);
          case "http" -> http(args);
          case "expiry" -> expiry(args);
+         case "admission" -> admission(args);
+         case "imagergb" -> imagergb(args);
+         case "rgbaorder" -> rgbaorder(args);
+         case "snapshot" -> snapshot(args);
          default -> {
             System.err.println("未知子命令: " + args[0]);
             System.exit(2);
          }
       }
+   }
+
+   /**
+    * 阶段 3：四个消费端共用的「这个源算不算有画面」矩阵。
+    *
+    * <p>参数：{@code admission <游戏目录> <本地视频> <本地图片> <白名单外视频> <不支持的扩展名> <缺失文件>}，
+    * 每行打印 {@code admission|<id>|remoteVideo|videoExpected|localKind|staticImage}。
+    */
+   private static void admission(String[] args) {
+      String gameDir = args[1];
+      String video = args[2];
+      String image = args[3];
+      String blocked = args[4];
+      String otherExt = args[5];
+      String missing = args[6];
+      emitAdmission("bili-only", true, "BV1xx411c7mD", gameDir);
+      emitAdmission("remote-http", false, "https://example.com/a.mp4", gameDir);
+      emitAdmission("local-video", false, video, gameDir);
+      emitAdmission("local-image", false, image, gameDir);
+      emitAdmission("local-video-with-sync", false, video + "#nmb_session=1&nmb_elapsed_ms=5", gameDir);
+      emitAdmission("outside-root", false, blocked, gameDir);
+      emitAdmission("unsupported-ext", false, otherExt, gameDir);
+      emitAdmission("missing-file", false, missing, gameDir);
+      emitAdmission("relative-path", false, "videos/a.mp4", gameDir);
+      emitAdmission("keyword", false, "cc", gameDir);
+      emitAdmission("blank", false, "", gameDir);
+      System.out.println("admission|videoSwitch|" + LocalVideoProperties.enabled());
+   }
+
+   private static void emitAdmission(String id, boolean remoteVideo, String rawUrl, String gameDir) {
+      LocalMediaAdmission.LocalKind kind = LocalMediaAdmission.localKind(rawUrl, gameDir);
+      boolean videoExpected = LocalMediaAdmission.videoExpected(remoteVideo, rawUrl, gameDir);
+      boolean staticImage = LocalMediaAdmission.staticImage(rawUrl, gameDir);
+      System.out.println("admission|" + id + "|" + remoteVideo + "|" + videoExpected + "|" + kind + "|" + staticImage);
+   }
+
+   /**
+    * 阶段 3：本地图片 → RGBA 字节（设备屏用的那条路）。参数：
+    * {@code imagergb <png> <jpg或-> <最大宽> <最大高> <最大像素> <过大图> <非图片> <缺失文件>}
+    */
+   private static void imagergb(String[] args) throws Exception {
+      String png = args[1];
+      String jpg = args.length > 2 && !"-".equals(args[2]) ? args[2] : null;
+      int maxWidth = Integer.parseInt(args[3]);
+      int maxHeight = Integer.parseInt(args[4]);
+      long maxPixels = Long.parseLong(args[5]);
+      String huge = args.length > 6 && !"-".equals(args[6]) ? args[6] : null;
+      String notImage = args.length > 7 && !"-".equals(args[7]) ? args[7] : null;
+      String missing = args.length > 8 && !"-".equals(args[8]) ? args[8] : null;
+      emitPixels("png", png, maxWidth, maxHeight, maxPixels);
+      emitPixels("png-scaled", png, 2, 2, maxPixels);
+      if (jpg != null) {
+         emitPixels("jpg", jpg, maxWidth, maxHeight, maxPixels);
+      }
+
+      if (huge != null) {
+         emitFailure("pixel-cap", huge, maxWidth, maxHeight, 16L);
+      }
+
+      if (notImage != null) {
+         emitFailure("not-image", notImage, maxWidth, maxHeight, maxPixels);
+      }
+
+      if (missing != null) {
+         emitFailure("missing", missing, maxWidth, maxHeight, maxPixels);
+      }
+   }
+
+   private static void emitPixels(String id, String path, int maxWidth, int maxHeight, long maxPixels) {
+      try {
+         LocalImageRgba.Pixels pixels = LocalImageRgba.load(Paths.get(path), maxWidth, maxHeight, maxPixels);
+         StringBuilder head = new StringBuilder();
+
+         for (int i = 0; i < Math.min(8, pixels.rgba().length); i++) {
+            head.append(String.format("%02x", pixels.rgba()[i] & 0xFF));
+         }
+
+         System.out.println(
+            "imagergb|" + id + "|ok|" + pixels.width() + "x" + pixels.height() + "|src=" + pixels.sourceWidth() + "x"
+               + pixels.sourceHeight() + "|scaled=" + pixels.scaled() + "|bytes=" + pixels.byteLength() + "|head=" + head
+               + "|sha=" + sha256(pixels.rgba()).substring(0, 16)
+         );
+      } catch (Exception error) {
+         System.out.println("imagergb|" + id + "|fail|" + error.getClass().getSimpleName() + "|" + error.getMessage());
+      }
+   }
+
+   private static void emitFailure(String id, String path, int maxWidth, int maxHeight, long maxPixels) {
+      try {
+         LocalImageRgba.load(Paths.get(path), maxWidth, maxHeight, maxPixels);
+         System.out.println("imagergb|" + id + "|ok");
+      } catch (Exception error) {
+         System.out.println("imagergb|" + id + "|fail|" + error.getClass().getSimpleName() + "|" + error.getMessage());
+      }
+   }
+
+   /**
+    * 通道顺序（红到底在哪个字节）：用 MC 自己的 {@code FastColor.ABGR32} 取色器来钉，
+    * 不靠「参数名应该是什么」的推断。
+    *
+    * <p>三行证据：
+    * <ul>
+    *   <li>{@code abgr32}：{@code ABGR32.color(0x11,0x22,0x33,0x44)} 拆出来的 red/green/blue/alpha；
+    *   <li>{@code handheld}：Pad/MP4 物品上传路径的打包函数（探针同包取用）拆出来的四个通道；
+    *   <li>{@code legacy}：老的写法 {@code ABGR32.color(a, r, g, b)} —— 应当把**蓝**塞进红槽（这就是画面发蓝的原因）；
+    *   <li>{@code image}：本地图片第一个像素的 R,G,B,A 字节（应当与 handheld 的口径一致）。
+    * </ul>
+    */
+   private static void rgbaorder(String[] args) throws Exception {
+      int packed = ABGR32.color(0x11, 0x22, 0x33, 0x44);
+      System.out.println("rgbaorder|abgr32|" + hex32(packed) + "|" + channels(packed));
+
+      int r = 0x44;
+      int g = 0x33;
+      int b = 0x22;
+      int a = 0x11;
+      int handheld = VerifyHandheldRgbaProbe.pack(r, g, b, a);
+      System.out.println("rgbaorder|handheld|" + hex32(handheld) + "|" + channels(handheld));
+
+      int legacy = ABGR32.color(a, r, g, b);
+      System.out.println("rgbaorder|legacy|" + hex32(legacy) + "|" + channels(legacy));
+
+      if (args.length > 1) {
+         LocalImageRgba.Pixels pixels = LocalImageRgba.load(Paths.get(args[1]), 64, 64, 1_000_000L);
+         int[] first = new int[4];
+
+         for (int i = 0; i < 4; i++) {
+            first[i] = pixels.rgba()[i] & 0xFF;
+         }
+
+         System.out.println("rgbaorder|image|" + hex32(handheld(first[0], first[1], first[2], first[3]))
+            + "|r=" + first[0] + ",g=" + first[1] + ",b=" + first[2] + ",a=" + first[3]);
+      }
+   }
+
+   private static int handheld(int r, int g, int b, int a) {
+      return VerifyHandheldRgbaProbe.pack(r, g, b, a);
+   }
+
+   private static String channels(int pixel) {
+      return "r=" + ABGR32.red(pixel) + ",g=" + ABGR32.green(pixel) + ",b=" + ABGR32.blue(pixel) + ",a=" + ABGR32.alpha(pixel);
+   }
+
+   private static String hex32(int value) {
+      return String.format("%08x", value);
+   }
+
+   /**
+    * 本地图片静态帧的标志位（决定渲染类型）：{@code emissiveRgba} 必须是 false ——
+    * true 会走 entityTranslucentEmissive（半透明、不写深度），天空的云就会穿到图片前面（实测过）。
+    * 这里直接调用产品里那个包私有工厂，把标志位钉住。
+    */
+   private static void snapshot(String[] args) {
+      ResourceLocation id = ResourceLocation.fromNamespaceAndPath("net_music_can_play_bili", "verify/local_image_probe");
+      VideoBillboardState.ProjectorFrameSnapshot frame = ClientLocalImageProjection.imageSnapshot(id, 640, 360);
+      System.out.println(
+         "snapshot|hasFrame=" + frame.hasFrame() + "|yuv=" + frame.yuv() + "|emissiveRgba=" + frame.emissiveRgba()
+            + "|loadingProgressOverlay=" + frame.loadingProgressOverlay() + "|rgbaDepthOffset=" + frame.rgbaDepthOffset()
+            + "|size=" + frame.width() + "x" + frame.height() + "|texture=" + (frame.rgbaTexture() != null)
+            + "|format=" + frame.format()
+      );
    }
 
    /**

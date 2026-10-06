@@ -49,7 +49,8 @@ record PadGuiViewState(
       int mapCenterZ = minecraft.player != null ? minecraft.player.blockPosition().getZ() : 0;
       PadMapSnapshot map = PadMapClientCache.snapshot(mapCenterX, mapCenterZ);
       boolean hasPlayback = deviceId != null && ClientMediaPlayback.hasPlayback(deviceId);
-      boolean hasVideoFrame = hasPlayback && MP4HandheldVideoClient.latestFrame(deviceId) != null;
+      // 阶段 3：本地图片是静态帧，没有「正在播放」也应当有画面
+      boolean hasVideoFrame = MP4HandheldVideoClient.latestFrame(deviceId) != null;
       boolean pausedOverlay = document.locked() && PadFocusState.pausedPlaybackAvailable() && PadFocusState.pausedVideo() && PadFocusState.controlsVisible();
       boolean transparentVideoOverlay = document.locked() && (hasVideoFrame || pausedOverlay);
       long elapsedMillis = deviceId != null ? ClientMediaPlayback.elapsedMillis(deviceId) : 0L;

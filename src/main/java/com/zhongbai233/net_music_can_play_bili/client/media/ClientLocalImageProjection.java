@@ -90,44 +90,63 @@ public final class ClientLocalImageProjection {
          PROJECTOR_TEXTURES.put(projectorPos.immutable(), ready.id);
          if (MediaLogThrottle.shouldLog("local-image-ready|" + pathText, ready.reason)) {
             LOGGER.info(
-               "本地图片已投射到投影仪: file={} 纹理={}x{} 投影仪={}（{}）",
+               "本地图片已交给画面消费端: file={} 纹理={}x{} 位置={}（{}）",
                new Object[]{pathText, ready.width, ready.height, projectorPos, ready.reason}
             );
          }
       }
    }
 
-   /** 该投影仪当前要显示的本地图片静态帧；没有则返回 null，调用方回落到原有视频/占位图逻辑。 */
-   public static VideoBillboardState.ProjectorFrameSnapshot frameForProjector(BlockPos projectorPos) {
-      if (projectorPos == null) {
+   /**
+    * 本地图片的静态帧快照。
+    *
+    * <p>{@code emissiveRgba} 必须为 **false**：这个标志决定渲染类型 ——
+    * {@code true} 会走 {@code entityTranslucentEmissive}（半透明、**不写深度**），
+    * 于是天空的云（也在半透明批次、且在更远处）会因为深度缓冲里没有这张图而画到图**前面**去
+    * （实测：开光影后云穿在图片上）。{@code false} 走 {@code YuvVideoRenderTypes.videoRgbaEntity}
+    * = {@code entityCutout}（写深度、alpha 裁剪），与视频 RGBA 帧完全同一条路 —— 视频在光影下正常，
+    * 图片也就正常了。亮度不受影响：顶点本来就写满亮（{@code RenderVertexUtils} 的 {@code FULL_BRIGHT}）。
+    */
+   static VideoBillboardState.ProjectorFrameSnapshot imageSnapshot(ResourceLocation id, int width, int height) {
+      return new VideoBillboardState.ProjectorFrameSnapshot(
+         true,
+         false,
+         id,
+         null,
+         null,
+         null,
+         Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA,
+         width,
+         height,
+         false,
+         false,
+         0.0F
+      );
+   }
+
+   /**
+    * 该**消费端位置**上当前要显示的本地图片静态帧；没有则返回 null，调用方回落到原有视频/占位图逻辑。
+    *
+    * <p>{@code consumerPos} 可以是投影仪、中控台屏幕，或全息眼镜绑定的投影仪/唱片机位置 ——
+    * 三者共用同一份「位置 → 纹理」映射（映射由 {@link #syncFromTurntable} 按消费端位置登记）。
+    */
+   public static VideoBillboardState.ProjectorFrameSnapshot frameForConsumer(BlockPos consumerPos) {
+      if (consumerPos == null) {
          return null;
       }
 
-      ResourceLocation id = PROJECTOR_TEXTURES.get(projectorPos);
+      ResourceLocation id = PROJECTOR_TEXTURES.get(consumerPos);
       if (id == null) {
          return null;
       }
 
       for (Entry entry : TEXTURES.values()) {
          if (entry.id.equals(id)) {
-            return new VideoBillboardState.ProjectorFrameSnapshot(
-               true,
-               false,
-               id,
-               null,
-               null,
-               null,
-               Fmp4NativeVideoDecoder.DecodedFrame.Format.RGBA,
-               entry.width,
-               entry.height,
-               true,
-               false,
-               0.0F
-            );
+            return imageSnapshot(id, entry.width, entry.height);
          }
       }
 
-      PROJECTOR_TEXTURES.remove(projectorPos);
+      PROJECTOR_TEXTURES.remove(consumerPos);
       return null;
    }
 

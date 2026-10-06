@@ -1,5 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.client.sync;
 
+import com.zhongbai233.net_music_can_play_bili.client.media.LocalVideoSources;
 import java.util.UUID;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.phys.Vec3;
@@ -18,9 +19,27 @@ public final class ClientMediaPlayback {
 
    public static HandheldMediaPlayback videoPlayback(UUID deviceId, boolean allowAiSubtitle) {
       ClientMediaPlaybackRegistry.ActivePlayback active = ClientMediaPlaybackRegistry.get(deviceId);
-      return active == null
-         ? HandheldMediaPlayback.EMPTY
-         : new HandheldMediaPlayback(active.playbackSessionId(), active.rawUrl(), active.songName(), active.timelineSnapshot(), allowAiSubtitle);
+      if (active == null) {
+         return HandheldMediaPlayback.EMPTY;
+      }
+
+      // 阶段 3：本地视频的真实时长只有客户端知道（服务端只会给出 NetMusic 唱片里的时长，
+      // 对本地文件通常是 0 或 1 秒）。重封装完成后用真实时长替换，否则设备会「播一下就停」。
+      MediaTimelineClock.TimelineSnapshot timeline = active.timelineSnapshot();
+      long localMillis = LocalVideoSources.knownDurationMillisForPath(active.rawUrl());
+      if (localMillis > 0L && timeline.totalMillis() != localMillis) {
+         timeline = new MediaTimelineClock.TimelineSnapshot(
+            timeline.playbackSessionId(),
+            timeline.mediaMillis(),
+            timeline.visualMillis(),
+            timeline.pacingMillis(),
+            timeline.serverMillis(),
+            localMillis,
+            timeline.mediaDriftMillis()
+         );
+      }
+
+      return new HandheldMediaPlayback(active.playbackSessionId(), active.rawUrl(), active.songName(), timeline, allowAiSubtitle);
    }
 
    public static boolean hasAudioStarted(UUID deviceId, String sessionId) {

@@ -13,6 +13,8 @@ import com.zhongbai233.net_music_can_play_bili.client.LiveStreamerVideoClient;
 import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableVideoClient;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAreaAudioZoneRegistry;
 import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
+import com.zhongbai233.net_music_can_play_bili.client.media.ClientLocalImageProjection;
+import com.zhongbai233.net_music_can_play_bili.client.media.LocalMediaAdmission;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.IrisShaderpackCompat;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardState;
@@ -129,6 +131,9 @@ public final class ControlConsoleRenderer implements BlockEntityRenderer<Control
       registerConsumer(console);
       reconcileConsumer(state.consolePos);
       state.consumerActive = isConsumerActive(state.consolePos);
+      // 注意顺序：syncLocalImageSource 读 state.consumerActive，必须在它被赋值**之后**调用，
+      // 否则首次渲染时读到默认的 false，本地图片永远登记不上（中控台没画面就是这么来的）。
+      syncLocalImageSource(console, state);
       state.hideVideoForPrivacy = VideoSurfacePrivacyPolicy.hideVideo(
          HolographicGlassesClient.shouldHideProjectorVideos(), VideoSurfacePrivacyPolicy.SurfaceKind.CONTROL_CONSOLE
       );
@@ -169,6 +174,27 @@ public final class ControlConsoleRenderer implements BlockEntityRenderer<Control
       }
 
       return state;
+   }
+
+   /**
+    * 阶段 3：本地图片源 —— 按「消费端位置」登记静态画面。
+    *
+    * <p>中控台屏幕与投影仪共用 {@link ClientLocalImageProjection} 的「位置 → 纹理」映射：这里把该
+    * 中控台位置登记/摘除，帧的实际注入点在 {@code VideoBillboardPreview.currentControlConsoleVideo}。
+    * 与唱片机是否在播放无关（海报式静态画面），也不做任何文件 IO（判定带 5 秒 TTL 缓存）。
+    */
+   private static void syncLocalImageSource(ControlConsoleBlockEntity console, ControlConsoleRenderer.State state) {
+      // 刻意**不看** state.consumerActive：那个标志的赋值时机与本方法的调用顺序耦合，
+      // 一旦顺序变了（首次渲染时它还是默认的 false），本地图片就会永远登记不上 —— 中控台没画面就是这么来的。
+      // 这里的判定本身很便宜（分类带 5 秒 TTL 缓存，纹理加载只做一次），多登记一个看不见的屏幕也无妨。
+      if (state.sourceKind != ControlConsoleDocument.SourceKind.TURNTABLE
+         || state.sourcePos == null
+         || console.getLevel() == null
+         || !(console.getLevel().getBlockEntity(state.sourcePos) instanceof ModernTurntableBlockEntity turntable)) {
+         return;
+      }
+
+      ClientLocalImageProjection.syncFromTurntable(turntable, state.consolePos);
    }
 
    private void submit(ControlConsoleRenderer.State state, PoseStack poseStack, PortSubmitNodeCollector collector) {
@@ -480,7 +506,7 @@ public final class ControlConsoleRenderer implements BlockEntityRenderer<Control
             ClientAiSubtitleRegistry.Snapshot aiSnapshot = ClientAiSubtitleRegistry.snapshot(sourcePos, sessionId);
             return new ControlConsoleRenderer.SourceSnapshot(
                turntable.isPlaying(),
-               BiliVideoStreamResolver.selectionOrNull(turntable.getRawUrl()) != null,
+               LocalMediaAdmission.videoExpected(BiliVideoStreamResolver.selectionOrNull(turntable.getRawUrl()) != null, turntable.getRawUrl()),
                turntable.getClientLyricRecord(),
                aiSnapshot.ready() ? aiSnapshot.lyricRecord() : null,
                lyricTick,

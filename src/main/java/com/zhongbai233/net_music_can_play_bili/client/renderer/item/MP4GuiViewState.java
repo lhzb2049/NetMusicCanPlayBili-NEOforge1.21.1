@@ -59,7 +59,9 @@ record MP4GuiViewState(
       boolean landscape = MP4FocusState.visualLandscape(1.0F);
       boolean videoEnabled = MP4FocusState.videoEnabled();
       boolean playing = MP4FocusState.playing();
-      boolean hasVideoFrame = videoEnabled && playing && MP4HandheldVideoClient.latestFrame(deviceId) != null;
+      boolean hasVideoFrame = videoEnabled
+         && (playing || MP4HandheldVideoClient.hasStaticImage(deviceId))
+         && MP4HandheldVideoClient.latestFrame(deviceId) != null;
       boolean biliLoginVisible = MP4BiliLoginOverlay.visible();
       boolean controlsVisible = MP4FocusState.controlsVisible();
       boolean lyricsEnabled = MP4FocusState.lyricsEnabled();

@@ -5,6 +5,8 @@ import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.PadDiagnosticsProperties;
 import com.zhongbai233.net_music_can_play_bili.bili.BiliVideoStreamResolver;
 import com.zhongbai233.net_music_can_play_bili.client.diagnostics.ClientMemoryProtection;
+import com.zhongbai233.net_music_can_play_bili.client.media.ClientLocalImageFrames;
+import com.zhongbai233.net_music_can_play_bili.client.media.LocalMediaAdmission;
 import com.zhongbai233.net_music_can_play_bili.client.media.LocalVideoSources;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.item.MP4ItemScreenRenderer;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.item.PadItemScreenRenderer;
@@ -121,11 +123,23 @@ public final class MP4HandheldVideoClient {
                      state.resolvingKey = key;
                      state.failedKey = HandheldPlaybackKey.EMPTY;
                      state.endedKey = HandheldPlaybackKey.EMPTY;
-                     if (!BiliVideoStreamResolver.isStoredVideoSelection(playback.rawUrl())) {
+                     if (!LocalMediaAdmission.videoExpected(
+                        BiliVideoStreamResolver.isStoredVideoSelection(playback.rawUrl()), playback.rawUrl()
+                     )) {
                         state.resolvingKey = HandheldPlaybackKey.EMPTY;
                         state.failedKey = key;
                         state.audioOnly = true;
                         state.statusText = "纯音乐";
+                        state.sourceWidth = 0;
+                        state.sourceHeight = 0;
+                        HandheldVideoFrameTimeline.clearFrameQueue(state);
+                        return false;
+                     }
+
+                     if (LocalMediaAdmission.localKind(playback.rawUrl()) == LocalMediaAdmission.LocalKind.LOCAL_IMAGE) {
+                        // 本地图片：静态画面（MP4RgbaVideoLayer 会从 ClientLocalImageFrames 取帧），不需要解析/解码
+                        state.audioOnly = false;
+                        state.statusText = "本地图片";
                         state.sourceWidth = 0;
                         state.sourceHeight = 0;
                         HandheldVideoFrameTimeline.clearFrameQueue(state);
@@ -169,18 +183,22 @@ public final class MP4HandheldVideoClient {
 
    public static HandheldVideoFrame latestFrame(UUID deviceId) {
       HandheldDeviceVideoState state = stateOrNull(deviceId);
-      return state != null ? state.latestFrame.get() : null;
+      HandheldVideoFrame frame = state != null ? state.latestFrame.get() : null;
+      // 阶段 3：本地图片是「静态一帧」，没有解码会话也应当有画面
+      return frame != null ? frame : ClientLocalImageFrames.frameForDevice(deviceId);
    }
 
    public static HandheldVideoFrame acquireLatestFrame(UUID deviceId) {
       HandheldDeviceVideoState state = stateOrNull(deviceId);
       if (state == null) {
-         return null;
+         HandheldVideoFrame image = ClientLocalImageFrames.frameForDevice(deviceId);
+         return image != null ? image.retain() : null;
       } else {
          for (int attempt = 0; attempt < 2; attempt++) {
             HandheldVideoFrame frame = state.latestFrame.get();
             if (frame == null) {
-               return null;
+               HandheldVideoFrame image = ClientLocalImageFrames.frameForDevice(deviceId);
+               return image != null ? image.retain() : null;
             }
 
             try {
@@ -195,7 +213,18 @@ public final class MP4HandheldVideoClient {
 
    public static long frameSequence(UUID deviceId) {
       HandheldDeviceVideoState state = stateOrNull(deviceId);
-      return state != null ? state.frameSequence.get() : -1L;
+      if (state != null && state.latestFrame.get() != null) {
+         return state.frameSequence.get();
+      }
+
+      // 静态图片：按图片内容给出固定序号（纹理只上传一次，之后每帧复用）
+      long image = ClientLocalImageFrames.sequenceForDevice(deviceId);
+      return image > 0L ? image : (state != null ? state.frameSequence.get() : -1L);
+   }
+
+   /** 该设备当前显示的是不是本地静态图片（渲染侧据此选 RGBA 图层、并放宽「必须正在播放」的条件）。 */
+   public static boolean hasStaticImage(UUID deviceId) {
+      return ClientLocalImageFrames.hasImage(deviceId);
    }
 
    public static String statusText(UUID deviceId) {
@@ -449,7 +478,9 @@ public final class MP4HandheldVideoClient {
             if (error != null) {
                state.resolvingKey = HandheldPlaybackKey.EMPTY;
                state.failedKey = key;
-               state.audioOnly = !BiliVideoStreamResolver.isStoredVideoSelection(playback.rawUrl());
+               state.audioOnly = !LocalMediaAdmission.videoExpected(
+                  BiliVideoStreamResolver.isStoredVideoSelection(playback.rawUrl()), playback.rawUrl()
+               );
                state.statusText = state.audioOnly ? "纯音乐" : "视频解析失败";
                LOGGER.warn("MP4 横屏视频流解析失败: session={} raw='{}' reason={}", new Object[]{playback.sessionId(), playback.rawUrl(), error.toString()});
                return;

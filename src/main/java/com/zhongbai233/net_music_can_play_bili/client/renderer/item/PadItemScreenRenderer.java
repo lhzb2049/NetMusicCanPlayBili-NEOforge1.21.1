@@ -303,7 +303,8 @@ public final class PadItemScreenRenderer {
    }
 
    private static boolean hasVideoFrame(UUID deviceId) {
-      return deviceId != null && ClientMediaPlayback.hasPlayback(deviceId) && MP4HandheldVideoClient.latestFrame(deviceId) != null;
+      // 阶段 3：本地图片是静态帧，没有「正在播放」也应当有画面
+      return deviceId != null && MP4HandheldVideoClient.latestFrame(deviceId) != null;
    }
 
    private static void submitVideoLayer(
@@ -320,8 +321,6 @@ public final class PadItemScreenRenderer {
    ) {
       if (deviceId == null) {
          logVideoSkip(null, fullSurface, "missing-device-id");
-      } else if (!ClientMediaPlayback.hasPlayback(deviceId)) {
-         logVideoSkip(deviceId, fullSurface, "no-local-playback");
       } else if (MP4HandheldVideoClient.latestFrame(deviceId) == null) {
          logVideoSkip(deviceId, fullSurface, "no-latest-frame");
       } else {
@@ -332,7 +331,7 @@ public final class PadItemScreenRenderer {
          float vy0 = y0 - insetY;
          float vx1 = x1 - insetX;
          float vy1 = y1 + insetY;
-         boolean useRgbaFallback = IrisShaderpackCompat.isShaderPackInUse();
+         boolean useRgbaFallback = IrisShaderpackCompat.isShaderPackInUse() || MP4HandheldVideoClient.hasStaticImage(deviceId);
          MP4RgbaVideoLayer rgbaLayer = MP4RgbaVideoLayer.forHandheldDevice(deviceId);
          boolean rgba = useRgbaFallback && rgbaLayer.uploadLatest(deviceId);
          MP4Nv12VideoLayer nv12Layer = MP4Nv12VideoLayer.forHandheldDevice(deviceId);

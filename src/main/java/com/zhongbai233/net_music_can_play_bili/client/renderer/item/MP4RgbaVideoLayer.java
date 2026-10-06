@@ -12,7 +12,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.resources.ResourceLocation;
-import net.minecraft.util.FastColor.ABGR32;
 
 final class MP4RgbaVideoLayer implements AutoCloseable {
    private static final Map<PlaybackSourceId, MP4RgbaVideoLayer> LAYERS = new ConcurrentHashMap<>();
@@ -150,10 +149,24 @@ final class MP4RgbaVideoLayer implements AutoCloseable {
                a = data[i + 3] & 255;
             }
 
-            image.setPixelRGBA(x, y, ABGR32.color(a, r, g, b));
+            image.setPixelRGBA(x, y, packPixel(r, g, b, a));
             i += 4;
          }
       }
+   }
+
+   /**
+    * 帧字节（R,G,B,A）→ {@code NativeImage} 需要的打包整数。
+    *
+    * <p>这里必须把**红**放进最低字节：MC 的 {@code FastColor.ABGR32} 命名是
+    * {@code color(alpha, blue, green, red)}，而 {@code NativeImage.setPixelRGBA} 在小端机器上
+    * 就是按这个顺序落盘，于是「最低字节 = 红」。写成 {@code ABGR32.color(a, r, g, b)} 会把红蓝对调
+    * （Pad / MP4 物品上的画面发蓝就是这个原因），改成算术写法后与投影仪通路的
+    * {@code VideoFrameUploader.packPixel} 默认模式逐位一致 —— 两条 RGBA 上传路径从此同口径，
+    * 离线探针 VerifyHandheldRgbaProbe / VerifyUploadRgbaProbe 会把这两个值钉住。
+    */
+   static int packPixel(int r, int g, int b, int a) {
+      return a << 24 | b << 16 | g << 8 | r;
    }
 
    @Override

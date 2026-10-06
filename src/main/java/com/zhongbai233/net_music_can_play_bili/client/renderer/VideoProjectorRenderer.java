@@ -90,7 +90,7 @@ public class VideoProjectorRenderer implements BlockEntityRenderer<VideoProjecto
             // 本地图片：海报式静态画面，与唱片机是否在播放无关。同步只做查表 + TTL 判定，
             // 真正的纹理加载排在客户端线程队列里（避免在方块实体渲染过程中做 GL 上传）。
             ClientLocalImageProjection.syncFromTurntable(turntable, projector.getBlockPos());
-            VideoBillboardState.ProjectorFrameSnapshot localImage = ClientLocalImageProjection.frameForProjector(
+            VideoBillboardState.ProjectorFrameSnapshot localImage = ClientLocalImageProjection.frameForConsumer(
                projector.getBlockPos()
             );
             state.visible = localImage != null || turntable.isPlaying();
@@ -173,7 +173,7 @@ public class VideoProjectorRenderer implements BlockEntityRenderer<VideoProjecto
    }
 
    public AABB getRenderBoundingBox(VideoProjectorBlockEntity blockEntity) {
-      VideoBillboardState.ProjectorFrameSnapshot localImage = ClientLocalImageProjection.frameForProjector(
+      VideoBillboardState.ProjectorFrameSnapshot localImage = ClientLocalImageProjection.frameForConsumer(
          blockEntity.getBlockPos()
       );
       VideoBillboardState.ProjectorFrameSnapshot frame = localImage != null

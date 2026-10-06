@@ -277,6 +277,30 @@ public final class LocalVideoSources {
       return prepared != null ? prepared.durationMillis() : 0L;
    }
 
+   /**
+    * 本地路径 → 已重封装出来的真实时长（0 表示还没重封装或不是本地视频）。
+    *
+    * <p>手持设备（Pad / MP4 物品）的时间轴由服务端同步，而服务端只知道 NetMusic 唱片里的时长：
+    * 本地文件它给不出真实时长，客户端拿到 0 或 1 秒就会「播一下就停」。所以设备侧用这里兜底。
+    */
+   public static long knownDurationMillisForPath(String rawUrl) {
+      Minecraft minecraft = Minecraft.getInstance();
+      if (minecraft == null || minecraft.gameDirectory == null || rawUrl == null || rawUrl.isBlank()) {
+         return 0L;
+      }
+
+      MediaSourceClassifier.Classification classification = MediaSourceClassifier.classifyThrottled(
+         rawUrl, minecraft.gameDirectory.getAbsolutePath()
+      );
+      if (classification.kind() != SourceKind.LOCAL_VIDEO || !classification.allowed() || classification.path() == null) {
+         return 0L;
+      }
+
+      LocalVideoSources.Entry entry = BY_PATH.get(classification.path());
+      LocalVideoSources.Prepared prepared = entry != null ? settled(entry) : null;
+      return prepared != null ? prepared.durationMillis() : 0L;
+   }
+
    /** 切换世界/退出：撤销所有回环地址并删除产物。 */
    public static void clearAll() {
       List<LocalVideoSources.Prepared> published = new ArrayList<>(BY_URL.values());

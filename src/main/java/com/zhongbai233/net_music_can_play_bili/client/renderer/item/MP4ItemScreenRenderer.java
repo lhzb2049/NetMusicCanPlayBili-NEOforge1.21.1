@@ -413,7 +413,9 @@ public final class MP4ItemScreenRenderer {
       float b3z
    ) {
       if (deviceId != null) {
-         if (MP4FocusState.visualLandscape(1.0F) && MP4FocusState.videoEnabled() && MP4FocusState.playing()) {
+         // 阶段 3：本地图片是静态帧（没有解码会话、也不需要「正在播放」）
+         boolean staticImage = MP4HandheldVideoClient.hasStaticImage(deviceId);
+         if (MP4FocusState.visualLandscape(1.0F) && MP4FocusState.videoEnabled() && (MP4FocusState.playing() || staticImage)) {
             float inset = 8.0F;
             float right = MP4GuiTexture.HEIGHT - 10.0F + 2.0F;
             float bottom = MP4GuiTexture.WIDTH - 10.0F + 2.0F;
@@ -422,7 +424,7 @@ public final class MP4ItemScreenRenderer {
             MP4ItemScreenRenderer.SurfacePoint bottomRight = landscapeSurfacePoint(right, bottom, bx0, by0, bx1, by1, b0z, b1z, b2z, b3z);
             MP4ItemScreenRenderer.SurfacePoint topRight = landscapeSurfacePoint(right, inset, bx0, by0, bx1, by1, b0z, b1z, b2z, b3z);
             MP4HandheldVideoClient.markVisible(deviceId);
-            boolean useRgbaFallback = IrisShaderpackCompat.isShaderPackInUse();
+            boolean useRgbaFallback = IrisShaderpackCompat.isShaderPackInUse() || staticImage;
             MP4RgbaVideoLayer rgbaLayer = MP4RgbaVideoLayer.forDevice(deviceId);
             boolean rgba = useRgbaFallback && rgbaLayer.uploadLatest(deviceId);
             MP4Nv12VideoLayer layer = MP4Nv12VideoLayer.forDevice(deviceId);
